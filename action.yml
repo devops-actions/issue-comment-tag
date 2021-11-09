@@ -13,7 +13,7 @@ inputs:
     description: 'The issue number to create a new comment in'
     required: true
   GITHUB_TOKEN:
-    description: 'The GitHub token to use to create a new comment with. Use ${{ secrets.GITHUB_TOKEN }} to inject it'
+    description: 'The GitHub token to use to create a new comment with. Use `secrets.GITHUB_TOKEN` to inject it'
     required: true
 runs:
   using: 'node12'
