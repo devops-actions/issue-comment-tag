@@ -1,0 +1,17 @@
+# action.yml
+name: 'Issue comment tag'
+author: 'Rob Bos'
+description: 'Tag a team in an issue comment.'
+branding:
+  icon : alert-circle
+  color: blue
+inputs:
+  team:
+    description: 'The tag of the team to mention in the issue comment'
+    required: false
+  issue:
+    description: 'The issue number to create a new comment in'
+    required: false
+runs:
+  using: 'node12'
+  main: 'dist/main.js'

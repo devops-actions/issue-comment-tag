@@ -10,4 +10,5 @@ Sometimes you want to tag a team or multiple persons when an issue (or something
   uses: rajbos/github-action-issue-comment-tag
   with:
     team: <team-name-here>
+    issue: <issue-number-here>
 ```
