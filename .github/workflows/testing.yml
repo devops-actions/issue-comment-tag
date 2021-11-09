@@ -22,7 +22,7 @@ jobs:
 
       - run: |
           echo "Hello"
-          echo "GITHUB_TOKEN: ${GITHUB_TOKEN}"
+          echo "GITHUB_TOKEN: ${ACTIONS_RUNTIME_TOKEN}"
 
       - uses: hmarr/debug-action@v2
 

@@ -8,13 +8,13 @@ dotenv.config()
 async function run(): Promise<void> {
   core.info('Starting')
   try {
-    const PAT = process.env.GITHUB_TOKEN || ''
+    const PAT = process.env.ACTIONS_RUNTIME_TOKEN || ''
     const issue = core.getInput('issue') || process.env.issue || ''
     const team = core.getInput('team') || process.env.team || ''
 
     if (!PAT || PAT === '') {
       core.setFailed(
-        "Cannot load 'GITHUB_TOKEN' which is required to be able to post the issue"
+        "Cannot load 'ACTIONS_RUNTIME_TOKEN' which is required to be able to post the issue"
       )
       return
     }
