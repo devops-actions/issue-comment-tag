@@ -10,7 +10,7 @@
       "format-check": "prettier --check **/*.ts",
       "lint": "eslint src/**/*.ts",
       "package": "npm run esbuild",
-      "test": "jest",
+      "test": "jest --passWithNoTests",
       "all": "npm run esbuild && npm run test # && npm run lint"
     },
     "repository": {
