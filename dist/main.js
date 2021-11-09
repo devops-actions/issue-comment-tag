@@ -14662,7 +14662,7 @@ function run() {
   return __async(this, null, function* () {
     core.info("Starting");
     try {
-      const PAT = process.env.GITHUB_TOKEN || "";
+      const PAT = core.getInput("GITHUB_TOKEN") || process.env.GITHUB_TOKEN || "";
       const issue = core.getInput("issue") || process.env.issue || "";
       const team = core.getInput("team") || process.env.team || "";
       if (!PAT || PAT === "") {

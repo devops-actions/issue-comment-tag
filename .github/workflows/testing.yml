@@ -31,3 +31,4 @@ jobs:
         with: 
           issue: 1
           team: rajbos
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
