@@ -8,10 +8,13 @@ branding:
 inputs:
   team:
     description: 'The tag of the team to mention in the issue comment'
-    required: false
+    required: true
   issue:
     description: 'The issue number to create a new comment in'
-    required: false
+    required: true
+  GITHUB_TOKEN:
+    description: 'The GitHub token to use to create a new comment with. Use ${{ secrets.GITHUB_TOKEN }} to inject it'
+    required: true
 runs:
   using: 'node12'
   main: 'dist/main.js'
