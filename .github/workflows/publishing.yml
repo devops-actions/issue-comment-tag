@@ -1,0 +1,70 @@
+name: Publishing the action to the marketplace
+
+on:   
+  push:
+    tags:
+      - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
+
+jobs:
+  build: # make sure build/ci work properly
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' # don't run on PRs
+    steps:
+      - uses: actions/checkout@v2
+      - run: npm ci
+      - run: npm run all
+
+  test-local-action:
+    needs: build
+    runs-on: ubuntu-latest
+    steps: 
+      - uses: actions/checkout@v2
+
+      # execute the action locally for testing if anything breaks
+      - uses: ./
+        name: Load used actions
+        with: 
+          issue: 1
+          team: rajbos
+          owner: ${{ github.repository_owner }}
+          repo: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+  publish:
+    needs: test-local-action
+    runs-on: ubuntu-latest
+    steps:
+      # get code
+      - uses: actions/checkout@v2
+
+      # build it
+      - run: |
+          npm ci
+          npm run all
+
+      # get tag for this release
+      - name: Get tag value
+        id: tag
+        uses: rajbos-actions/action-get-tag@v1   
+
+      # publish a release with the build assets
+      - uses: rajbos-actions/action-gh-release@v1
+        id: publish
+        with:
+          name: Release ${{ steps.tag.outputs.tag }}
+          tag_name: ${{ github.ref }}
+          body: Release ${{ steps.tag.outputs.tag }} is available now
+          files: ./dist/main.js
+          token: ${{ secrets.PAT }}
+
+      - run: |
+          echo "$url"
+        env:
+          url: ${{ steps.publish.outputs.url }}
+
+      - uses: rajbos-actions/slack@v1
+        with: 
+          status: ${{ job.status }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        if: always()
