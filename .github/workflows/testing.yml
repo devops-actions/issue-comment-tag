@@ -31,6 +31,6 @@ jobs:
         with: 
           issue: 1
           team: rajbos
-          owner: rajbos
-          repo: github-action-issue-comment-tag
+          owner: ${{ github.repository_owner }}
+          repo: ${{ github.repository }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
