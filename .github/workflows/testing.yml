@@ -15,22 +15,19 @@ jobs:
       - run: npm run all
 
   test-tag-a-user:
+    needs: build
     runs-on: ubuntu-latest
     #if: github.ref == 'refs/heads/main' # don't run on PRs or branches
     steps: 
       - uses: actions/checkout@v2 # this will checkout the compiled Typescript
-
-      - run: |
-          echo "Hello"
-          echo "GITHUB_TOKEN: ${ACTIONS_RUNTIME_TOKEN}"
-
-      - uses: hmarr/debug-action@v2
+      
+      #- uses: hmarr/debug-action@v2
 
       - uses: ./ # load and run local action
         name: Tag a user
         with: 
           issue: 1
           team: rajbos
-          owner: rajbos
-          repo: github-action-issue-comment-tag
+          owner: ${{ github.repository_owner }}
+          repo: ${{ github.repository }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

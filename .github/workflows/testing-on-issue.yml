@@ -1,4 +1,4 @@
-name: Testing the action
+name: Issue trigger
 
 on: 
   workflow_dispatch:
@@ -7,31 +7,19 @@ on:
     types: [opened]
     
 jobs:
-  build: # make sure build/ci work properly
-    runs-on: ubuntu-latest
-    #if: github.ref == 'refs/heads/main' # don't run on PRs
-    steps:
-      - uses: actions/checkout@v2
-      - run: npm ci
-      - run: npm run all
-
   test-tag-a-user:
     runs-on: ubuntu-latest
     #if: github.ref == 'refs/heads/main' # don't run on PRs or branches
     steps: 
       - uses: actions/checkout@v2 # this will checkout the compiled Typescript
+     
+      #- uses: hmarr/debug-action@v2
 
-      - run: |
-          echo "Hello"
-          echo "GITHUB_TOKEN: ${ACTIONS_RUNTIME_TOKEN}"
-
-      - uses: hmarr/debug-action@v2
-
-      - uses: ./ # load and run local action
+      - uses: ./ # load and run the action
         name: Tag a user
         with: 
           issue: ${{ github.issue.number }}
           team: rajbos
           owner: ${{ github.repository_owner }}
-          repo: ${{ github.repository_name }}
+          repo: ${{ github.repository }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

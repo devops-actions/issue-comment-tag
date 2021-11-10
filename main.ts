@@ -11,8 +11,8 @@ async function run(): Promise<void> {
     const PAT = core.getInput('GITHUB_TOKEN') || process.env.PAT || ''
     const issue = core.getInput('issue') || process.env.issue || ''
     const team = core.getInput('team') || process.env.team || ''
-    const repo = core.getInput('repo') || process.env.repo || ''
-    const owner = core.getInput('owner') || process.env.owner || ''
+    let repo = core.getInput('repo') || process.env.repo || ''
+    let owner = core.getInput('owner') || process.env.owner || ''
 
     if (!PAT || PAT === '') {
       core.setFailed(
@@ -33,6 +33,14 @@ async function run(): Promise<void> {
         "Both parameters 'owner' or 'repo' are required to load all actions from it. Please provide one of them."
       )
       return
+    }
+
+    // convert owner/repo to repo if needed
+    if (repo.indexOf('/') > -1) {
+      const parts = repo.split('/')
+      owner = parts[0]
+      repo = parts[1]
+      console.log(`Converted owner/repo input for the repo to owner: [${owner}] and repo: [${repo}]`)
     }
 
     console.log(`Parameters that we have. Owner: [${owner}], Repo: [${repo}], Issue: [${issue}], team: [${team}] and a token with length: [${PAT.length}]`)
