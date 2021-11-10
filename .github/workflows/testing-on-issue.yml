@@ -15,10 +15,14 @@ jobs:
      
       #- uses: hmarr/debug-action@v2
 
+      - run: |
+         echo "Event information: ${{ github.event.issue.number }}"
+         echo "Title: ${{ github.event.issue.title }}"
+
       - uses: ./ # load and run the action
         name: Tag a user
         with: 
-          issue: ${{ github.issue.number }}
+          issue: ${{ github.event.issue.number }}
           team: rajbos
           owner: ${{ github.repository_owner }}
           repo: ${{ github.repository }}

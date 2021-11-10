@@ -14671,11 +14671,11 @@ function run() {
         core.setFailed("Cannot load 'GITHUB_TOKEN' which is required to be able to post the issue");
         return;
       }
-      if (team === "" && issue === "") {
+      if (team === "" || issue === "") {
         core.setFailed("Both parameters 'team' or 'issue' are required to load all actions from it. Please provide one of them.");
         return;
       }
-      if (owner === "" && repo === "") {
+      if (owner === "" || repo === "") {
         core.setFailed("Both parameters 'owner' or 'repo' are required to load all actions from it. Please provide one of them.");
         return;
       }
