@@ -67,10 +67,10 @@ async function run(): Promise<void> {
 
       console.log(`Found issue comments: ${comments.length}`)
       comments.forEach(comment => {
-         console.log(`comment: [${comment.id}] with text [${comment.body_text}]`)
-         if (comment.body_text !== undefined) {
+         console.log(`comment: [${comment.id}] with text [${comment.body_text}] and [${comment.body}]`)
+         if (comment.body !== undefined) {
            // search for the @team in all comments
-           if (comment.body_text.indexOf(`@${team}`) > -1) {
+           if (comment.body.indexOf(`@${team}`) > -1) {
             commentExists = true
            }
          }

@@ -14704,9 +14704,9 @@ function run() {
         });
         console.log(`Found issue comments: ${comments.length}`);
         comments.forEach((comment) => {
-          console.log(`comment: [${comment.id}] with text [${comment.body_text}]`);
-          if (comment.body_text !== void 0) {
-            if (comment.body_text.indexOf(`@${team}`) > -1) {
+          console.log(`comment: [${comment.id}] with text [${comment.body_text}] and [${comment.body}]`);
+          if (comment.body !== void 0) {
+            if (comment.body.indexOf(`@${team}`) > -1) {
               commentExists = true;
             }
           }
