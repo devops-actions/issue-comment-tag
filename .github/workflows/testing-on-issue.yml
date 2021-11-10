@@ -32,6 +32,6 @@ jobs:
         with: 
           issue: ${{ github.issue.number }}
           team: rajbos
-          owner: ${{ github.repository.owner }}
-          repo: ${{ github.repository.name }}
+          owner: ${{ github.repository_owner }}
+          repo: ${{ github.repository_name }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
