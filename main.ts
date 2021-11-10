@@ -45,13 +45,15 @@ async function run(): Promise<void> {
 
       console.log(`Hello, ${currentUser.data.login}`)
     } catch (error) {
-      core.setFailed(
-        `Could not authenticate with GITHUB_TOKEN. Please check that it is correct and that it has [read access] to the organization or user account: ${error}`
-      )
+      // core.setFailed(
+      //   `Could not authenticate with GITHUB_TOKEN. Please check that it is correct and that it has [read access] to the organization or user account: ${error}`
+      // )
+      console.log(`Could not authenticate with GITHUB_TOKEN. Please check that it is correct and that it has [read access] to the organization or user account: ${error}`)
       //return
     }
 
     try {
+      console.log(`Getting the list of actions from the issue: [${issue}]`)
       const { data: currentIssue } = await octokit.rest.issues.get({
         owner,
         repo,
