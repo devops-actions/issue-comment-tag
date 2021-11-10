@@ -6,7 +6,6 @@ import dotenv from 'dotenv'
 dotenv.config()
 
 async function run(): Promise<void> {
-  core.info('Starting')
   console.log('Starting')
   try {
     const PAT = core.getInput('GITHUB_TOKEN') || process.env.PAT || ''
@@ -22,7 +21,7 @@ async function run(): Promise<void> {
       return
     }
 
-    if (team === '' && issue === '') {
+    if (team === '' && issue === '') {      
       core.setFailed(
         "Both parameters 'team' or 'issue' are required to load all actions from it. Please provide one of them."
       )
@@ -37,7 +36,9 @@ async function run(): Promise<void> {
     }
 
     console.log(`Parameters that we have. Owner: [${owner}], Repo: [${repo}], Issue: [${issue}], team: [${team}] and a token with length: [${PAT.length}]`)
-    const octokit = new Octokit({auth: PAT})    
+    const octokit = new Octokit({auth: PAT})   
+    // todo: check if the team / user to tag exists at all    
+
     try {
       console.log(`Getting the list of actions from the issue: [${issue}]`)
       const { data: currentIssue } = await octokit.rest.issues.get({
@@ -46,7 +47,7 @@ async function run(): Promise<void> {
         issue_number: +issue,
       });
 
-      console.log(`Found issue: ${currentIssue.title}`)
+      console.log(`Found issue: [${currentIssue.title}]`)
       // todo: check if the team is already tagged in the issue body
     } catch (error) {
       core.setFailed(
@@ -67,7 +68,7 @@ async function run(): Promise<void> {
 
       console.log(`Found issue comments: ${comments.length}`)
       comments.forEach(comment => {
-         console.log(`comment: [${comment.id}] with text [${comment.body_text}] and [${comment.body}]`)
+         console.log(`comment: [${comment.id}] with text [${comment.body}]`)
          if (comment.body !== undefined) {
            // search for the @team in all comments
            if (comment.body.indexOf(`@${team}`) > -1) {
