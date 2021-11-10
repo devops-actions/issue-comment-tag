@@ -12,6 +12,12 @@ inputs:
   issue:
     description: 'The issue number to create a new comment in'
     required: true
+  owner:
+    description: 'The owner for the repo to create a new comment in'
+    required: true
+  repo:
+    description: 'The repo to create a new comment in'
+    required: true
   GITHUB_TOKEN:
     description: 'The GitHub token to use to create a new comment with. Use `secrets.GITHUB_TOKEN` to inject it'
     required: true

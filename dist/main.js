@@ -688,12 +688,12 @@ var require_http_client = __commonJS({
           throw new Error("Client has already been disposed.");
         }
         let parsedUrl = new URL(requestUrl);
-        let info2 = this._prepareRequest(verb, parsedUrl, headers);
+        let info = this._prepareRequest(verb, parsedUrl, headers);
         let maxTries = this._allowRetries && RetryableHttpVerbs.indexOf(verb) != -1 ? this._maxRetries + 1 : 1;
         let numTries = 0;
         let response;
         while (numTries < maxTries) {
-          response = await this.requestRaw(info2, data);
+          response = await this.requestRaw(info, data);
           if (response && response.message && response.message.statusCode === HttpCodes.Unauthorized) {
             let authenticationHandler;
             for (let i = 0; i < this.handlers.length; i++) {
@@ -703,7 +703,7 @@ var require_http_client = __commonJS({
               }
             }
             if (authenticationHandler) {
-              return authenticationHandler.handleAuthentication(this, info2, data);
+              return authenticationHandler.handleAuthentication(this, info, data);
             } else {
               return response;
             }
@@ -726,8 +726,8 @@ var require_http_client = __commonJS({
                 }
               }
             }
-            info2 = this._prepareRequest(verb, parsedRedirectUrl, headers);
-            response = await this.requestRaw(info2, data);
+            info = this._prepareRequest(verb, parsedRedirectUrl, headers);
+            response = await this.requestRaw(info, data);
             redirectsRemaining--;
           }
           if (HttpResponseRetryCodes.indexOf(response.message.statusCode) == -1) {
@@ -747,7 +747,7 @@ var require_http_client = __commonJS({
         }
         this._disposed = true;
       }
-      requestRaw(info2, data) {
+      requestRaw(info, data) {
         return new Promise((resolve, reject) => {
           let callbackForResult = function(err, res) {
             if (err) {
@@ -755,13 +755,13 @@ var require_http_client = __commonJS({
             }
             resolve(res);
           };
-          this.requestRawWithCallback(info2, data, callbackForResult);
+          this.requestRawWithCallback(info, data, callbackForResult);
         });
       }
-      requestRawWithCallback(info2, data, onResult) {
+      requestRawWithCallback(info, data, onResult) {
         let socket;
         if (typeof data === "string") {
-          info2.options.headers["Content-Length"] = Buffer.byteLength(data, "utf8");
+          info.options.headers["Content-Length"] = Buffer.byteLength(data, "utf8");
         }
         let callbackCalled = false;
         let handleResult = (err, res) => {
@@ -770,7 +770,7 @@ var require_http_client = __commonJS({
             onResult(err, res);
           }
         };
-        let req = info2.httpModule.request(info2.options, (msg) => {
+        let req = info.httpModule.request(info.options, (msg) => {
           let res = new HttpClientResponse(msg);
           handleResult(null, res);
         });
@@ -781,7 +781,7 @@ var require_http_client = __commonJS({
           if (socket) {
             socket.end();
           }
-          handleResult(new Error("Request timeout: " + info2.options.path), null);
+          handleResult(new Error("Request timeout: " + info.options.path), null);
         });
         req.on("error", function(err) {
           handleResult(err, null);
@@ -803,27 +803,27 @@ var require_http_client = __commonJS({
         return this._getAgent(parsedUrl);
       }
       _prepareRequest(method, requestUrl, headers) {
-        const info2 = {};
-        info2.parsedUrl = requestUrl;
-        const usingSsl = info2.parsedUrl.protocol === "https:";
-        info2.httpModule = usingSsl ? https : http;
+        const info = {};
+        info.parsedUrl = requestUrl;
+        const usingSsl = info.parsedUrl.protocol === "https:";
+        info.httpModule = usingSsl ? https : http;
         const defaultPort = usingSsl ? 443 : 80;
-        info2.options = {};
-        info2.options.host = info2.parsedUrl.hostname;
-        info2.options.port = info2.parsedUrl.port ? parseInt(info2.parsedUrl.port) : defaultPort;
-        info2.options.path = (info2.parsedUrl.pathname || "") + (info2.parsedUrl.search || "");
-        info2.options.method = method;
-        info2.options.headers = this._mergeHeaders(headers);
+        info.options = {};
+        info.options.host = info.parsedUrl.hostname;
+        info.options.port = info.parsedUrl.port ? parseInt(info.parsedUrl.port) : defaultPort;
+        info.options.path = (info.parsedUrl.pathname || "") + (info.parsedUrl.search || "");
+        info.options.method = method;
+        info.options.headers = this._mergeHeaders(headers);
         if (this.userAgent != null) {
-          info2.options.headers["user-agent"] = this.userAgent;
+          info.options.headers["user-agent"] = this.userAgent;
         }
-        info2.options.agent = this._getAgent(info2.parsedUrl);
+        info.options.agent = this._getAgent(info.parsedUrl);
         if (this.handlers) {
           this.handlers.forEach((handler) => {
-            handler.prepareRequest(info2.options);
+            handler.prepareRequest(info.options);
           });
         }
-        return info2;
+        return info;
       }
       _mergeHeaders(headers) {
         const lowercaseKeys = (obj) => Object.keys(obj).reduce((c, k) => (c[k.toLowerCase()] = obj[k], c), {});
@@ -1273,10 +1273,10 @@ Support boolean input list: \`true | True | TRUE | false | False | FALSE\``);
       command_1.issueCommand("notice", utils_1.toCommandProperties(properties), message instanceof Error ? message.toString() : message);
     }
     exports2.notice = notice;
-    function info2(message) {
+    function info(message) {
       process.stdout.write(message + os.EOL);
     }
-    exports2.info = info2;
+    exports2.info = info;
     function startGroup(name) {
       command_1.issue("group", name);
     }
@@ -7699,11 +7699,11 @@ var require_dist_node11 = __commonJS({
     }
     async function wrapRequest(state, request, options) {
       const limiter = new Bottleneck();
-      limiter.on("failed", function(error, info2) {
+      limiter.on("failed", function(error, info) {
         const maxRetries = ~~error.request.request.retries;
         const after = ~~error.request.request.retryAfter;
-        options.request.retryCount = info2.retryCount + 1;
-        if (maxRetries > info2.retryCount) {
+        options.request.retryCount = info.retryCount + 1;
+        if (maxRetries > info.retryCount) {
           return after * state.retryAfterBaseValue;
         }
       });
@@ -14660,31 +14660,77 @@ var import_dotenv = __toModule(require_main());
 import_dotenv.default.config();
 function run() {
   return __async(this, null, function* () {
-    core.info("Starting");
+    console.log("Starting");
     try {
-      const PAT = core.getInput("GITHUB_TOKEN") || process.env.GITHUB_TOKEN || "";
+      const PAT = core.getInput("GITHUB_TOKEN") || process.env.PAT || "";
       const issue = core.getInput("issue") || process.env.issue || "";
       const team = core.getInput("team") || process.env.team || "";
+      const repo = core.getInput("repo") || process.env.repo || "";
+      const owner = core.getInput("owner") || process.env.owner || "";
       if (!PAT || PAT === "") {
         core.setFailed("Cannot load 'GITHUB_TOKEN' which is required to be able to post the issue");
         return;
       }
       if (team === "" && issue === "") {
-        core.setFailed("Either parameter 'user' or 'organization' is required to load all actions from it. Please provide one of them.");
+        core.setFailed("Both parameters 'team' or 'issue' are required to load all actions from it. Please provide one of them.");
         return;
       }
-      core.info(`Parameters that we have. Issue: [${issue}], team: [${team}]`);
+      if (owner === "" && repo === "") {
+        core.setFailed("Both parameters 'owner' or 'repo' are required to load all actions from it. Please provide one of them.");
+        return;
+      }
+      console.log(`Parameters that we have. Owner: [${owner}], Repo: [${repo}], Issue: [${issue}], team: [${team}] and a token with length: [${PAT.length}]`);
       const octokit = new import_octokit.Octokit({ auth: PAT });
       try {
-        const currentUser = yield octokit.rest.users.getAuthenticated();
-        core.info(`Hello, ${currentUser.data.login}`);
+        console.log(`Getting the list of actions from the issue: [${issue}]`);
+        const { data: currentIssue } = yield octokit.rest.issues.get({
+          owner,
+          repo,
+          issue_number: +issue
+        });
+        console.log(`Found issue: [${currentIssue.title}]`);
       } catch (error) {
         core.setFailed(`Could not authenticate with GITHUB_TOKEN. Please check that it is correct and that it has [read access] to the organization or user account: ${error}`);
         return;
       }
-      core.info("completed");
+      let commentExists = false;
+      try {
+        console.log(`Checking all comments on the issue to prevent us adding the comment twice: [${issue}]`);
+        const { data: comments } = yield octokit.rest.issues.listComments({
+          owner,
+          repo,
+          issue_number: +issue
+        });
+        console.log(`Found issue comments: ${comments.length}`);
+        comments.forEach((comment) => {
+          console.log(`comment: [${comment.id}] with text [${comment.body}]`);
+          if (comment.body !== void 0) {
+            if (comment.body.indexOf(`@${team}`) > -1) {
+              commentExists = true;
+            }
+          }
+        });
+        if (commentExists) {
+          console.log(`Comment exists`);
+          return;
+        } else {
+          console.log(`Comment does not exist.`);
+          console.log(`Adding comment to the issue`);
+          const body = `Tagging @${team} for notifications`;
+          octokit.rest.issues.createComment({
+            owner,
+            repo,
+            issue_number: +issue,
+            body
+          });
+        }
+      } catch (error) {
+        core.setFailed(`Could not authenticate with GITHUB_TOKEN. Please check that it is correct and that it has [read access] to the organization or user account: ${error}`);
+        return;
+      }
+      console.log("Completed");
     } catch (error) {
-      core.setFailed(`Error running action: : ${error.message}`);
+      core.setFailed(`Error running action: : ${error}`);
     }
   });
 }
