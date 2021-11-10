@@ -67,7 +67,7 @@ async function run(): Promise<void> {
 
       console.log(`Found issue comments: ${comments.length}`)
       comments.forEach(comment => {
-         console.log(`comment: [${comment.id}]`)
+         console.log(`comment: [${comment.id}] with text [${comment.body_text}]`)
          if (comment.body_text !== undefined) {
            // search for the @team in all comments
            if (comment.body_text.indexOf(`@${team}`) > -1) {
@@ -77,10 +77,10 @@ async function run(): Promise<void> {
       })   
 
       if (commentExists) {
-        console.log(`Comment exists: ${commentExists}`)
+        console.log(`Comment exists`)
         return
       } else {
-        console.log(`Comment does not exist: ${commentExists}`)
+        console.log(`Comment does not exist.`)
         console.log(`Adding comment to the issue`)
 
         const body = `Tagging @${team} for notifications`
