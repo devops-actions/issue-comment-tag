@@ -9,7 +9,7 @@ Sometimes you want to tag a team or multiple persons when an issue (or something
 ``` yaml
   - uses: rajbos/github-action-issue-comment-tag
     with:
-      team: <team-name-here>
+      team: < insert team or user name >
       issue: ${{ github.issue.number }}
       owner: ${{ github.repository_owner }}
       repo: ${{ github.repository_name }}
@@ -30,7 +30,7 @@ jobs:
         name: Tag a user or team in an issue comment
         with: 
           issue: ${{ github.issue.number }}
-          team: rajbos
+          team: < insert team or user name >
           owner: ${{ github.repository_owner }}
           repo: ${{ github.repository_name }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
