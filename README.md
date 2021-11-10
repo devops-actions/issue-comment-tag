@@ -6,9 +6,32 @@ Sometimes you want to tag a team or multiple persons when an issue (or something
 
 # Usage:
 
+``` yaml
+  - uses: rajbos/github-action-issue-comment-tag
+    with:
+      team: <team-name-here>
+      issue: ${{ github.issue.number }}
+      owner: ${{ github.repository_owner }}
+      repo: ${{ github.repository_name }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
-  uses: rajbos/github-action-issue-comment-tag
-  with:
-    team: <team-name-here>
-    issue: <issue-number-here>
+
+# Example workflow:
+``` yaml
+on:
+  issues:
+    types: [opened]
+    
+jobs:
+  tag-a-user:
+    runs-on: ubuntu-latest
+    steps: 
+      - uses: rajbos/github-action-issue-comment-tag
+        name: Tag a user or team in an issue comment
+        with: 
+          issue: ${{ github.issue.number }}
+          team: rajbos
+          owner: ${{ github.repository_owner }}
+          repo: ${{ github.repository_name }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
