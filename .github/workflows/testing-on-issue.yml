@@ -13,7 +13,7 @@ jobs:
     steps: 
       - uses: actions/checkout@v2 # this will checkout the compiled Typescript
      
-      - uses: hmarr/debug-action@v2
+      #- uses: hmarr/debug-action@v2
 
       - uses: ./ # load and run the action
         name: Tag a user
