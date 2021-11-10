@@ -42,9 +42,9 @@ async function run(): Promise<void> {
     }
 
     try {
-      const currentUser = await octokit.rest.repos.()
+      // const currentUser = await octokit.rest.repos.()
 
-      core.info(`Hello, ${currentUser.data.login}`)
+      // core.info(`Hello, ${currentUser.data.login}`)
     } catch (error) {
       core.setFailed(
         `Could not authenticate with GITHUB_TOKEN. Please check that it is correct and that it has [read access] to the organization or user account: ${error}`
