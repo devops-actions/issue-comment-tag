@@ -14661,33 +14661,47 @@ import_dotenv.default.config();
 function run() {
   return __async(this, null, function* () {
     core.info("Starting");
+    console.log("Starting");
     try {
-      const PAT = core.getInput("GITHUB_TOKEN") || process.env.GITHUB_TOKEN || "";
+      const PAT = core.getInput("GITHUB_TOKEN") || process.env.PAT || "";
       const issue = core.getInput("issue") || process.env.issue || "";
       const team = core.getInput("team") || process.env.team || "";
+      const repo = core.getInput("repo") || process.env.repo || "";
+      const owner = core.getInput("owner") || process.env.owner || "";
       if (!PAT || PAT === "") {
         core.setFailed("Cannot load 'GITHUB_TOKEN' which is required to be able to post the issue");
         return;
       }
       if (team === "" && issue === "") {
-        core.setFailed("Both parameters 'team' or 'issue' is required to load all actions from it. Please provide one of them.");
+        core.setFailed("Both parameters 'team' or 'issue' are required to load all actions from it. Please provide one of them.");
         return;
       }
-      core.info(`Parameters that we have. Issue: [${issue}], team: [${team}] and a token with length: [${PAT.length}]`);
+      if (owner === "" && repo === "") {
+        core.setFailed("Both parameters 'owner' or 'repo' are required to load all actions from it. Please provide one of them.");
+        return;
+      }
+      console.log(`Parameters that we have. Issue: [${issue}], team: [${team}] and a token with length: [${PAT.length}]`);
       const octokit = new import_octokit.Octokit({ auth: PAT });
       try {
         const currentUser = yield octokit.rest.users.getAuthenticated();
-        core.info(`Hello, ${currentUser.data.login}`);
+        console.log(`Hello, ${currentUser.data.login}`);
       } catch (error) {
-        core.setFailed(`Could not authenticate with GITHUB_TOKEN. Please check that it is correct and that it has [read access] to the organization or user account: ${error}`);
+        console.log(`Could not authenticate with GITHUB_TOKEN. Please check that it is correct and that it has [read access] to the organization or user account: ${error}`);
       }
       try {
+        console.log(`Getting the list of actions from the issue: [${issue}]`);
+        const { data: currentIssue } = yield octokit.rest.issues.get({
+          owner,
+          repo,
+          issue_number: +issue
+        });
+        console.log(`Found issue: ${currentIssue.title}`);
       } catch (error) {
         core.setFailed(`Could not authenticate with GITHUB_TOKEN. Please check that it is correct and that it has [read access] to the organization or user account: ${error}`);
       }
-      core.info("completed");
+      console.log("Completed");
     } catch (error) {
-      core.setFailed(`Error running action: : ${error.message}`);
+      core.setFailed(`Error running action: : ${error}`);
     }
   });
 }
