@@ -14680,14 +14680,8 @@ function run() {
         core.setFailed("Both parameters 'owner' or 'repo' are required to load all actions from it. Please provide one of them.");
         return;
       }
-      console.log(`Parameters that we have. Issue: [${issue}], team: [${team}] and a token with length: [${PAT.length}]`);
+      console.log(`Parameters that we have. Owner: [${owner}], Repo: [${repo}], Issue: [${issue}], team: [${team}] and a token with length: [${PAT.length}]`);
       const octokit = new import_octokit.Octokit({ auth: PAT });
-      try {
-        const currentUser = yield octokit.rest.users.getAuthenticated();
-        console.log(`Hello, ${currentUser.data.login}`);
-      } catch (error) {
-        console.log(`Could not authenticate with GITHUB_TOKEN. Please check that it is correct and that it has [read access] to the organization or user account: ${error}`);
-      }
       try {
         console.log(`Getting the list of actions from the issue: [${issue}]`);
         const { data: currentIssue } = yield octokit.rest.issues.get({
@@ -14698,6 +14692,42 @@ function run() {
         console.log(`Found issue: ${currentIssue.title}`);
       } catch (error) {
         core.setFailed(`Could not authenticate with GITHUB_TOKEN. Please check that it is correct and that it has [read access] to the organization or user account: ${error}`);
+        return;
+      }
+      let commentExists = false;
+      try {
+        console.log(`Checking all comments on the issue to prevent us adding the comment twice: [${issue}]`);
+        const { data: comments } = yield octokit.rest.issues.listComments({
+          owner,
+          repo,
+          issue_number: +issue
+        });
+        console.log(`Found issue comments: ${comments.length}`);
+        comments.forEach((comment) => {
+          console.log(`comment: [${comment.id}]`);
+          if (comment.body_text !== void 0) {
+            if (comment.body_text.indexOf(`@${team}`) > -1) {
+              commentExists = true;
+            }
+          }
+        });
+        if (commentExists) {
+          console.log(`Comment exists: ${commentExists}`);
+          return;
+        } else {
+          console.log(`Comment does not exist: ${commentExists}`);
+          console.log(`Adding comment to the issue`);
+          const body = `Tagging @${team} for notifications`;
+          octokit.rest.issues.createComment({
+            owner,
+            repo,
+            issue_number: +issue,
+            body
+          });
+        }
+      } catch (error) {
+        core.setFailed(`Could not authenticate with GITHUB_TOKEN. Please check that it is correct and that it has [read access] to the organization or user account: ${error}`);
+        return;
       }
       console.log("Completed");
     } catch (error) {

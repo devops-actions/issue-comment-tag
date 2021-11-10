@@ -36,22 +36,8 @@ async function run(): Promise<void> {
       return
     }
 
-    console.log(`Parameters that we have. Issue: [${issue}], team: [${team}] and a token with length: [${PAT.length}]`)
-
-    const octokit = new Octokit({auth: PAT})
-
-    try {
-      const currentUser = await octokit.rest.users.getAuthenticated()
-
-      console.log(`Hello, ${currentUser.data.login}`)
-    } catch (error) {
-      // core.setFailed(
-      //   `Could not authenticate with GITHUB_TOKEN. Please check that it is correct and that it has [read access] to the organization or user account: ${error}`
-      // )
-      console.log(`Could not authenticate with GITHUB_TOKEN. Please check that it is correct and that it has [read access] to the organization or user account: ${error}`)
-      //return
-    }
-
+    console.log(`Parameters that we have. Owner: [${owner}], Repo: [${repo}], Issue: [${issue}], team: [${team}] and a token with length: [${PAT.length}]`)
+    const octokit = new Octokit({auth: PAT})    
     try {
       console.log(`Getting the list of actions from the issue: [${issue}]`)
       const { data: currentIssue } = await octokit.rest.issues.get({
@@ -61,11 +47,57 @@ async function run(): Promise<void> {
       });
 
       console.log(`Found issue: ${currentIssue.title}`)
+      // todo: check if the team is already tagged in the issue body
     } catch (error) {
       core.setFailed(
         `Could not authenticate with GITHUB_TOKEN. Please check that it is correct and that it has [read access] to the organization or user account: ${error}`
       )
-      //return
+      return
+    }
+
+    let commentExists = false
+    try {
+      console.log(`Checking all comments on the issue to prevent us adding the comment twice: [${issue}]`)
+      // todo, figure out pagination:
+      const {data: comments} = await octokit.rest.issues.listComments({
+        owner: owner,
+        repo: repo,
+        issue_number: +issue,
+      })
+
+      console.log(`Found issue comments: ${comments.length}`)
+      comments.forEach(comment => {
+         console.log(`comment: [${comment.id}]`)
+         if (comment.body_text !== undefined) {
+           // search for the @team in all comments
+           if (comment.body_text.indexOf(`@${team}`) > -1) {
+            commentExists = true
+           }
+         }
+      })   
+
+      if (commentExists) {
+        console.log(`Comment exists: ${commentExists}`)
+        return
+      } else {
+        console.log(`Comment does not exist: ${commentExists}`)
+        console.log(`Adding comment to the issue`)
+
+        const body = `Tagging @${team} for notifications`
+        octokit.rest.issues.createComment({
+          owner,
+          repo,
+          issue_number: +issue,
+          body,
+        });
+      }
+
+      
+    } catch (error) {
+      core.setFailed(
+        `Could not authenticate with GITHUB_TOKEN. Please check that it is correct and that it has [read access] to the organization or user account: ${error}`
+      )
+      return
     }
 
     console.log('Completed')
