@@ -18,7 +18,7 @@ jobs:
       - uses: ./ # load and run the action
         name: Tag a user
         with: 
-          issue: ${{ github.issue.number }}
+          issue: ${{ github.event.issue.number }}
           team: rajbos
           owner: ${{ github.repository_owner }}
           repo: ${{ github.repository }}
