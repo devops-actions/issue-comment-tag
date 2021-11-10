@@ -21,12 +21,12 @@ async function run(): Promise<void> {
 
     if (team === '' && issue === '') {
       core.setFailed(
-        "Either parameter 'user' or 'organization' is required to load all actions from it. Please provide one of them."
+        "Both parameters 'team' or 'issue' is required to load all actions from it. Please provide one of them."
       )
       return
     }
 
-    core.info(`Parameters that we have. Issue: [${issue}], team: [${team}]`)
+    core.info(`Parameters that we have. Issue: [${issue}], team: [${team}] and a token with length: [${PAT.length}]`)
 
     const octokit = new Octokit({auth: PAT})
 
@@ -38,7 +38,18 @@ async function run(): Promise<void> {
       core.setFailed(
         `Could not authenticate with GITHUB_TOKEN. Please check that it is correct and that it has [read access] to the organization or user account: ${error}`
       )
-      return
+      //return
+    }
+
+    try {
+      const currentUser = await octokit.rest.repos.()
+
+      core.info(`Hello, ${currentUser.data.login}`)
+    } catch (error) {
+      core.setFailed(
+        `Could not authenticate with GITHUB_TOKEN. Please check that it is correct and that it has [read access] to the organization or user account: ${error}`
+      )
+      //return
     }
 
     core.info('completed')
