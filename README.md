@@ -1,4 +1,4 @@
-# github-action-issue-comment-tag
+# devops-actions/issue-comment-tag
 Tag a user or a team in an issue comment
 
 Sometimes you want to tag a team or multiple persons when an issue (or something else) is created. This action will help you do that by tagging them in an issue.
@@ -7,7 +7,7 @@ Sometimes you want to tag a team or multiple persons when an issue (or something
 # Usage:
 
 ``` yaml
-  - uses: rajbos/github-action-issue-comment-tag
+  - uses: devops-actions/issue-comment-tag
     with:
       team: < insert team or user name >
       issue: ${{ github.issue.number }}
@@ -26,7 +26,7 @@ jobs:
   tag-a-user:
     runs-on: ubuntu-latest
     steps: 
-      - uses: rajbos/github-action-issue-comment-tag
+      - uses: devops-actions/issue-comment-tag
         name: Tag a user or team in an issue comment
         with: 
           issue: ${{ github.issue.number }}
