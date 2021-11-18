@@ -7,12 +7,12 @@ Sometimes you want to tag a team or multiple persons when an issue (or something
 # Usage:
 
 ``` yaml
-  - uses: devops-actions/issue-comment-tag
+  - uses: devops-actions/issue-comment-tag@v0.1.0
     with:
       team: < insert team or user name >
-      issue: ${{ github.issue.number }}
+      issue: ${{ github.event.issue.number }}
       owner: ${{ github.repository_owner }}
-      repo: ${{ github.repository_name }}
+      repo: ${{ github.repository }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
@@ -26,12 +26,12 @@ jobs:
   tag-a-user:
     runs-on: ubuntu-latest
     steps: 
-      - uses: devops-actions/issue-comment-tag
+      - uses: devops-actions/issue-comment-tag@v0.1.0
         name: Tag a user or team in an issue comment
         with: 
-          issue: ${{ github.issue.number }}
+          issue: ${{ github.event.issue.number }}
           team: < insert team or user name >
           owner: ${{ github.repository_owner }}
-          repo: ${{ github.repository_name }}
+          repo: ${{ github.repository }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
