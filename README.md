@@ -2,6 +2,7 @@
 Tag a user or a team in an issue comment
 
 Sometimes you want to tag a team or multiple persons when an issue (or something else) is created. This action will help you do that by tagging them in an issue.
+##### Note: only tagging a single person or team is currently supported.
 
 
 # Usage:
@@ -35,3 +36,6 @@ jobs:
           repo: ${{ github.repository }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
+
+## Tagging an internal team or user
+If you need to tag an internal team `@<org name>/team` or user, then you need to send in a **Personal Access Token** to do so: the normal `GITHUB_TOKEN` doesn't have access outside the current repository, which also means it cannot see the users in the organization.
