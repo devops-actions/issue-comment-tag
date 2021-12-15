@@ -48,3 +48,6 @@ jobs:
 
 ## Tagging an internal team or user
 If you need to tag an internal team `@<org name>/team` or user, then you need to send in a **Personal Access Token** to do so: the normal `GITHUB_TOKEN` doesn't have access outside the current repository, which also means it cannot see the users in the organization.
+
+If you are using a GitHub App for creating the access token, you need to give the App the following scope:
+- Organization permissions - Members: Read only
