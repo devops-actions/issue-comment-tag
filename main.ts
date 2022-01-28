@@ -13,6 +13,7 @@ async function run(): Promise<void> {
     const team = core.getInput('team') || process.env.team || ''
     let repo = core.getInput('repo') || process.env.repo || ''
     let owner = core.getInput('owner') || process.env.owner || ''
+    let BASE_URL = process.env.GITHUB_API_URL || 'https://api.github.com'
 
     if (!PAT || PAT === '') {
       core.setFailed(
@@ -44,7 +45,7 @@ async function run(): Promise<void> {
     }
 
     console.log(`Parameters that we have. Owner: [${owner}], Repo: [${repo}], Issue: [${issue}], team: [${team}] and a token with length: [${PAT.length}]`)
-    const octokit = new Octokit({auth: PAT})   
+    const octokit = new Octokit({auth: PAT, baseUrl: BASE_URL})   
     // todo: check if the team / user to tag exists at all    
 
     try {
