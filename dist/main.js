@@ -14667,6 +14667,7 @@ function run() {
       const team = core.getInput("team") || process.env.team || "";
       let repo = core.getInput("repo") || process.env.repo || "";
       let owner = core.getInput("owner") || process.env.owner || "";
+      let BASE_URL = process.env.GITHUB_API_URL || "https://api.github.com";
       if (!PAT || PAT === "") {
         core.setFailed("Cannot load 'GITHUB_TOKEN' which is required to be able to post the issue");
         return;
@@ -14686,7 +14687,7 @@ function run() {
         console.log(`Converted owner/repo input for the repo to owner: [${owner}] and repo: [${repo}]`);
       }
       console.log(`Parameters that we have. Owner: [${owner}], Repo: [${repo}], Issue: [${issue}], team: [${team}] and a token with length: [${PAT.length}]`);
-      const octokit = new import_octokit.Octokit({ auth: PAT });
+      const octokit = new import_octokit.Octokit({ auth: PAT, baseUrl: BASE_URL });
       try {
         console.log(`Getting the list of actions from the issue: [${issue}]`);
         const { data: currentIssue } = yield octokit.rest.issues.get({
