@@ -13,7 +13,8 @@ async function run(): Promise<void> {
     const team = core.getInput('team') || process.env.team || ''
     let repo = core.getInput('repo') || process.env.repo || ''
     let owner = core.getInput('owner') || process.env.owner || ''
-    let BASE_URL = process.env.GITHUB_API_URL || 'https://api.github.com'
+    //Retrieve GitHub endpoint so that Octokit can communicate to the correct GitHub instance instead of the default public "api.github.com"
+    let BASE_URL = process.env.GITHUB_API_URL
 
     if (!PAT || PAT === '') {
       core.setFailed(
