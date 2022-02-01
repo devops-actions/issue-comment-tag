@@ -14667,7 +14667,7 @@ function run() {
       const team = core.getInput("team") || process.env.team || "";
       let repo = core.getInput("repo") || process.env.repo || "";
       let owner = core.getInput("owner") || process.env.owner || "";
-      let BASE_URL = process.env.GITHUB_API_URL || "api.github.com";
+      let BASE_URL = process.env.GITHUB_API_URL || "https://api.github.com";
       if (!PAT || PAT === "") {
         core.setFailed("Cannot load 'GITHUB_TOKEN' which is required to be able to post the issue");
         return;
