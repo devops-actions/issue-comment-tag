@@ -9,12 +9,12 @@ Sometimes you want to tag a team or multiple persons when an issue (or something
 
 Requirements:
 
-A GitHub App [https://docs.github.com/en/developers/apps/getting-started-with-apps/about-apps#about-github-apps] installed on the repository/organization that the GitHub Actions Workflow will execute from
+A [GitHub App](https://docs.github.com/en/developers/apps/getting-started-with-apps/about-apps#about-github-apps) installed on the repository/organization that the GitHub Actions Workflow will execute from.
 The GitHub Apps minimally should have the following permissions:
   - Read & write access to Issues
   - Read-only access to Members
   - Read-only access to Administration (Only applicable for GitHub Enterprise Server)
-A method to retrieve `GITHUB_TOKEN` (script/action), a good example for action would be `peter-murray/workflow-application-token-action`
+A method to retrieve an access token from the App, a good example for an action would be [this action](https://github.com/peter-murray/workflow-application-token-action).
 
 ``` yaml
   - uses: devops-actions/issue-comment-tag@v0.1.0
@@ -47,7 +47,7 @@ jobs:
 ```
 
 ## Tagging an internal team or user
-If you need to tag an internal team `@<org name>/team` or user, then you need to send in a **Personal Access Token** to do so: the normal `GITHUB_TOKEN` doesn't have access outside the current repository, which also means it cannot see the users in the organization.
+If you need to tag an internal team `@<org name>/team` or user, then you need to send in an **Access Token** that has the rights to do so: the normal `GITHUB_TOKEN` doesn't have access outside the current repository, which also means it cannot see the users in the organization.
 
 If you are using a GitHub App for creating the access token, you need to give the App the following scope:
 - Organization permissions - Members: Read only
