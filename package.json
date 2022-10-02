@@ -24,7 +24,7 @@
     "author": "@rajbos",
     "license": "MIT",
     "dependencies": {
-      "@actions/core": "^1.9.1",
+      "@actions/core": "^1.10.0",
       "octokit": "^2.0.7",
       "yaml": "^2.1.1"
     },
@@ -43,7 +43,7 @@
       "prettier": "2.7.1",
       "tmpl": ">=1.0.5",
       "ts-jest": "^27.1.4",
-      "typescript": "^4.8.2"
+      "typescript": "^4.8.4"
     },
     "optionalDependencies": {
       "fsevents": "^2.3.2"
