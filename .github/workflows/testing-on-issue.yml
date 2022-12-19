@@ -15,9 +15,11 @@ jobs:
      
       #- uses: hmarr/debug-action@v2
 
-      - run: |
+      - env:
+          TITLE: ${{ github.event.issue.title }}
+        run: |
          echo "Event information: ${{ github.event.issue.number }}"
-         echo "Title: ${{ github.event.issue.title }}"
+         echo "Title: $TITLE"
 
       - uses: ./ # load and run the action
         name: Tag a user
