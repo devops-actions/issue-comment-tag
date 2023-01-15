@@ -4,7 +4,10 @@ on:
   push:
   pull_request: 
   workflow_dispatch:
-    
+
+permissions:
+  contents: read
+
 jobs:
   build: # make sure build/ci work properly
     runs-on: ubuntu-latest

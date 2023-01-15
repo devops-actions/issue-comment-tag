@@ -5,6 +5,10 @@ on:
     tags:
       - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
 
+permissions:
+  contents: read
+  releases: write
+
 jobs:
   build: # make sure build/ci work properly
     runs-on: ubuntu-latest

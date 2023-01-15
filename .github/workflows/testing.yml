@@ -4,6 +4,10 @@ on:
   push:
 
   workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
     
 jobs:
   build: # make sure build/ci work properly

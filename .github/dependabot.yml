@@ -1,19 +1,5 @@
 version: 2
 updates:
-  # disabled to cut down on the noise updates give (and then require to push new versions
-  # I decided to roll back on these updates and only do them when a dependency has a vulnerability issue
-  
-  - package-ecosystem: github-actions-disabled
-    directory: .github/workflows
-    schedule:
-      interval: monthly
-
-  - package-ecosystem: npm-disabled
-    directory: /
-    schedule:
-      interval: monthly
-
-
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -23,4 +9,3 @@ updates:
     directory: /
     schedule:
       interval: monthly
-
