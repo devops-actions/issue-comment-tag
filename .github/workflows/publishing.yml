@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: read
-  releases: write
+  #releases: write # not a valid scope, not sure what it needs then, so let's test without it
 
 jobs:
   build: # make sure build/ci work properly
