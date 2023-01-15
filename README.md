@@ -1,9 +1,10 @@
+![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/devops-actions/issue-comment-tag/badge)](https://api.securityscorecards.dev/projects/github.com/devops-actions/issue-comment-tag)
+
 # devops-actions/issue-comment-tag
 Tag a user or a team in an issue comment
 
-Sometimes you want to tag a team or multiple persons when an issue (or something else) is created. This action will help you do that by tagging them in an issue.
-##### Note: only tagging a single person or team is currently supported.
-
+Sometimes you want to tag a team or multiple persons when an issue (or something else) is created. This action will help you do that by tagging them in an issue by making a comment that tags them.
+##### Note: only tagging a single person or a single team is currently supported.
 
 # Usage:
 
