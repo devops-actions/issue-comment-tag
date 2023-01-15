@@ -1,4 +1,4 @@
-![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/devops-actions/issue-comment-tag/badge)](https://api.securityscorecards.dev/projects/github.com/devops-actions/issue-comment-tag)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/devops-actions/issue-comment-tag/badge)](https://api.securityscorecards.dev/projects/github.com/devops-actions/issue-comment-tag)
 
 # devops-actions/issue-comment-tag
 Tag a user or a team in an issue comment
