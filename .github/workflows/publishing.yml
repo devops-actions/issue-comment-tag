@@ -9,7 +9,7 @@ jobs:
   build: # make sure build/ci work properly
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c # v3.3.0
       - run: npm ci
       - run: npm run all
 
@@ -17,7 +17,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps: 
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c # v3.3.0
 
       # execute the action locally for testing if anything breaks
       - uses: ./
@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # get code
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c # v3.3.0
 
       # build it
       - run: |
@@ -44,10 +44,10 @@ jobs:
       # get tag for this release
       - name: Get tag value
         id: tag
-        uses: rajbos-actions/action-get-tag@v1   
+        uses: rajbos-actions/action-get-tag@12319896edaa290b27558e34a177804e9b8d077b # v1   
 
       # publish a release with the build assets
-      - uses: rajbos-actions/action-gh-release@v1
+      - uses: rajbos-actions/action-gh-release@6034af24fba4e5a8e975aaa6056554efe4c794d0 # v1
         id: publish
         with:
           name: Release ${{ steps.tag.outputs.tag }}
@@ -61,7 +61,7 @@ jobs:
         env:
           url: ${{ steps.publish.outputs.url }}
 
-      - uses: rajbos-actions/slack@v1
+      - uses: rajbos-actions/slack@e4e71685b9b239384b0f676a63c32367f59c2522 # v1.2.2
         with: 
           status: ${{ job.status }}
         env:

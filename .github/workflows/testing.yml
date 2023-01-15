@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     #if: github.ref == 'refs/heads/main' # don't run on PRs
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c # v3.3.0
       - run: npm ci
       - run: npm run all
 
@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     #if: github.ref == 'refs/heads/main' # don't run on PRs or branches
     steps: 
-      - uses: actions/checkout@v3 # this will checkout the compiled Typescript
+      - uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c # v3.3.0 # this will checkout the compiled Typescript
       
       #- uses: hmarr/debug-action@v2
 

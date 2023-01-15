@@ -1,6 +1,9 @@
 name: Lint GitHub Actions workflows
 on: [push, pull_request]
 
+permissions:  # added using https://github.com/step-security/secure-workflows
+  contents: read
+
 jobs:
   actionlint:
     runs-on: ubuntu-latest
