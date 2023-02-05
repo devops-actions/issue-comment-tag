@@ -4,12 +4,12 @@ changelog:
       labels:
         - Semver-Minor
         - enhancement
-    - title: Other Changes
-      labels:
-        - "*"
     - title: Dependency updates (GitHub Actions)
       labels:
         - github_actions
     - title: Dependency updates (Other)
       labels:
         - dependencies
+    - title: Other Changes
+      labels:
+        - "*"
