@@ -48,7 +48,7 @@ jobs:
       # get tag for this release
       - name: Get tag value
         id: tag
-        uses: devops-actions/action-get-tag@d17aac219dd2d692ddc84a3c9b97b91346c60962 # v1.0.1
+        uses: devops-actions/action-get-tag@5e518133e65bbd50a8446e41380404d2231fb9be # v1.0.1
 
       # publish a release with the build assets
       - uses: rajbos-actions/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
