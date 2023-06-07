@@ -12,6 +12,9 @@ inputs:
   issue:
     description: 'The issue number to create a new comment in'
     required: true
+  pr:
+    description: 'The pr number to create a new comment in'
+    required: true
   owner:
     description: 'The owner for the repo to create a new comment in'
     required: true

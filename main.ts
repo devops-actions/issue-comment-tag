@@ -9,7 +9,8 @@ async function run(): Promise<void> {
   console.log('Starting')
   try {
     const PAT = core.getInput('GITHUB_TOKEN') || process.env.PAT || ''
-    const issue = core.getInput('issue') || process.env.issue || ''
+    var issue = core.getInput('issue') || process.env.issue || ''
+    const pr = core.getInput('pr') || process.env.pr || ''
     const team = core.getInput('team') || process.env.team || ''
     let repo = core.getInput('repo') || process.env.repo || ''
     let owner = core.getInput('owner') || process.env.owner || ''
@@ -23,16 +24,29 @@ async function run(): Promise<void> {
       return
     }
 
-    if (team === '' || issue === '') {      
+    if (team === '') {
       core.setFailed(
-        "Both parameters 'team' or 'issue' are required to load all actions from it. Please provide one of them."
+        "Parameter 'team' is required. Please provide it, can be a single user as well"
       )
       return
     }
+    
+    if (issue === '' || pr === '') {
+      core.setFailed(
+        "Either parameters 'pr' or 'issue' is required. Please provide one of them."
+      )
+      return
+    }
+    
+    if (pr !== ``) {
+      // overwrite the issue number with the pr number
+      issue = pr
+    }
+
 
     if (owner === '' || repo === '') {
       core.setFailed(
-        "Both parameters 'owner' or 'repo' are required to load all actions from it. Please provide one of them."
+        "Both parameters 'owner' or 'repo' are required. Please provide both of them."
       )
       return
     }
