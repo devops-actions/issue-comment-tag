@@ -32,6 +32,24 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+var __accessCheck = (obj, member, msg) => {
+  if (!member.has(obj))
+    throw TypeError("Cannot " + msg);
+};
+var __privateGet = (obj, member, getter) => {
+  __accessCheck(obj, member, "read from private field");
+  return getter ? getter.call(obj) : member.get(obj);
+};
+var __privateAdd = (obj, member, value) => {
+  if (member.has(obj))
+    throw TypeError("Cannot add the same private member more than once");
+  member instanceof WeakSet ? member.add(obj) : member.set(obj, value);
+};
+var __privateSet = (obj, member, value, setter) => {
+  __accessCheck(obj, member, "write to private field");
+  setter ? setter.call(obj, value) : member.set(obj, value);
+  return value;
+};
 var __async = (__this, __arguments, generator) => {
   return new Promise((resolve, reject) => {
     var fulfilled = (value) => {
@@ -2333,7 +2351,10 @@ var require_before_after_hook = __commonJS({
     var bind = Function.bind;
     var bindable = bind.bind(bind);
     function bindApi(hook, state, name) {
-      var removeHookRef = bindable(removeHook, null).apply(null, name ? [state, name] : [state]);
+      var removeHookRef = bindable(removeHook, null).apply(
+        null,
+        name ? [state, name] : [state]
+      );
       hook.api = { remove: removeHookRef };
       hook.remove = removeHookRef;
       ["before", "error", "after", "wrap"].forEach(function(kind) {
@@ -2361,7 +2382,9 @@ var require_before_after_hook = __commonJS({
     var collectionHookDeprecationMessageDisplayed = false;
     function Hook() {
       if (!collectionHookDeprecationMessageDisplayed) {
-        console.warn('[before-after-hook]: "Hook()" repurposing warning, use "Hook.Collection()". Read more: https://git.io/upgrade-before-after-hook-to-1.4');
+        console.warn(
+          '[before-after-hook]: "Hook()" repurposing warning, use "Hook.Collection()". Read more: https://git.io/upgrade-before-after-hook-to-1.4'
+        );
         collectionHookDeprecationMessageDisplayed = true;
       }
       return HookCollection();
@@ -2648,8 +2671,6 @@ var require_dist_node2 = __commonJS({
         } else {
           if (Object.keys(remainingParameters).length) {
             body = remainingParameters;
-          } else {
-            headers["content-length"] = 0;
           }
         }
       }
@@ -2682,7 +2703,7 @@ var require_dist_node2 = __commonJS({
         parse: parse2
       });
     }
-    var VERSION = "7.0.0";
+    var VERSION = "7.0.5";
     var userAgent = `octokit-endpoint.js/${VERSION} ${universalUserAgent.getUserAgent()}`;
     var DEFAULTS = {
       method: "GET",
@@ -5473,6 +5494,11 @@ var require_lib3 = __commonJS({
       const dest = new URL$1(destination).hostname;
       return orig === dest || orig[orig.length - dest.length - 1] === "." && orig.endsWith(dest);
     };
+    var isSameProtocol = function isSameProtocol2(destination, original) {
+      const orig = new URL$1(original).protocol;
+      const dest = new URL$1(destination).protocol;
+      return orig === dest;
+    };
     function fetch(url, opts) {
       if (!fetch.Promise) {
         throw new Error("native promise missing, set fetch.Promise to your favorite alternative");
@@ -5488,7 +5514,7 @@ var require_lib3 = __commonJS({
           let error = new AbortError("The user aborted a request.");
           reject(error);
           if (request.body && request.body instanceof Stream.Readable) {
-            request.body.destroy(error);
+            destroyStream(request.body, error);
           }
           if (!response || !response.body)
             return;
@@ -5523,8 +5549,31 @@ var require_lib3 = __commonJS({
         }
         req.on("error", function(err) {
           reject(new FetchError(`request to ${request.url} failed, reason: ${err.message}`, "system", err));
+          if (response && response.body) {
+            destroyStream(response.body, err);
+          }
           finalize();
         });
+        fixResponseChunkedTransferBadEnding(req, function(err) {
+          if (signal && signal.aborted) {
+            return;
+          }
+          if (response && response.body) {
+            destroyStream(response.body, err);
+          }
+        });
+        if (parseInt(process.version.substring(1)) < 14) {
+          req.on("socket", function(s) {
+            s.addListener("close", function(hadError) {
+              const hasDataListener = s.listenerCount("data") > 0;
+              if (response && hasDataListener && !hadError && !(signal && signal.aborted)) {
+                const err = new Error("Premature close");
+                err.code = "ERR_STREAM_PREMATURE_CLOSE";
+                response.body.emit("error", err);
+              }
+            });
+          });
+        }
         req.on("response", function(res) {
           clearTimeout(reqTimeout);
           const headers = createHeadersLenient(res.headers);
@@ -5575,7 +5624,7 @@ var require_lib3 = __commonJS({
                   timeout: request.timeout,
                   size: request.size
                 };
-                if (!isDomainOrSubdomain(request.url, locationURL)) {
+                if (!isDomainOrSubdomain(request.url, locationURL) || !isSameProtocol(request.url, locationURL)) {
                   for (const name of ["authorization", "www-authenticate", "cookie", "cookie2"]) {
                     requestOpts.headers.delete(name);
                   }
@@ -5636,6 +5685,12 @@ var require_lib3 = __commonJS({
               response = new Response2(body, response_options);
               resolve(response);
             });
+            raw.on("end", function() {
+              if (!response) {
+                response = new Response2(body, response_options);
+                resolve(response);
+              }
+            });
             return;
           }
           if (codings == "br" && typeof zlib.createBrotliDecompress === "function") {
@@ -5649,6 +5704,33 @@ var require_lib3 = __commonJS({
         });
         writeToStream(req, request);
       });
+    }
+    function fixResponseChunkedTransferBadEnding(request, errorCallback) {
+      let socket;
+      request.on("socket", function(s) {
+        socket = s;
+      });
+      request.on("response", function(response) {
+        const headers = response.headers;
+        if (headers["transfer-encoding"] === "chunked" && !headers["content-length"]) {
+          response.once("close", function(hadError) {
+            const hasDataListener = socket.listenerCount("data") > 0;
+            if (hasDataListener && !hadError) {
+              const err = new Error("Premature close");
+              err.code = "ERR_STREAM_PREMATURE_CLOSE";
+              errorCallback(err);
+            }
+          });
+        }
+      });
+    }
+    function destroyStream(stream, err) {
+      if (stream.destroy) {
+        stream.destroy(err);
+      } else {
+        stream.emit("error", err);
+        stream.end();
+      }
     }
     fetch.isRedirect = function(code) {
       return code === 301 || code === 302 || code === 303 || code === 307 || code === 308;
@@ -5814,42 +5896,76 @@ var require_dist_node4 = __commonJS({
 
 // node_modules/@octokit/request/dist-node/index.js
 var require_dist_node5 = __commonJS({
-  "node_modules/@octokit/request/dist-node/index.js"(exports) {
+  "node_modules/@octokit/request/dist-node/index.js"(exports, module2) {
     "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    function _interopDefault(ex) {
-      return ex && typeof ex === "object" && "default" in ex ? ex["default"] : ex;
-    }
-    var endpoint = require_dist_node2();
-    var universalUserAgent = require_dist_node();
-    var isPlainObject = require_is_plain_object();
-    var nodeFetch = _interopDefault(require_lib3());
-    var requestError = require_dist_node4();
-    var VERSION = "6.2.0";
+    var __create2 = Object.create;
+    var __defProp2 = Object.defineProperty;
+    var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
+    var __getOwnPropNames2 = Object.getOwnPropertyNames;
+    var __getProtoOf2 = Object.getPrototypeOf;
+    var __hasOwnProp2 = Object.prototype.hasOwnProperty;
+    var __export2 = (target, all) => {
+      for (var name in all)
+        __defProp2(target, name, { get: all[name], enumerable: true });
+    };
+    var __copyProps2 = (to, from, except, desc) => {
+      if (from && typeof from === "object" || typeof from === "function") {
+        for (let key of __getOwnPropNames2(from))
+          if (!__hasOwnProp2.call(to, key) && key !== except)
+            __defProp2(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc2(from, key)) || desc.enumerable });
+      }
+      return to;
+    };
+    var __toESM2 = (mod, isNodeMode, target) => (target = mod != null ? __create2(__getProtoOf2(mod)) : {}, __copyProps2(
+      // If the importer is in node compatibility mode or this is not an ESM
+      // file that has been converted to a CommonJS file using a Babel-
+      // compatible transform (i.e. "__esModule" has not been set), then set
+      // "default" to the CommonJS "module.exports" for node compatibility.
+      isNodeMode || !mod || !mod.__esModule ? __defProp2(target, "default", { value: mod, enumerable: true }) : target,
+      mod
+    ));
+    var __toCommonJS2 = (mod) => __copyProps2(__defProp2({}, "__esModule", { value: true }), mod);
+    var dist_src_exports = {};
+    __export2(dist_src_exports, {
+      request: () => request
+    });
+    module2.exports = __toCommonJS2(dist_src_exports);
+    var import_endpoint = require_dist_node2();
+    var import_universal_user_agent = require_dist_node();
+    var VERSION = "6.2.5";
+    var import_is_plain_object = require_is_plain_object();
+    var import_node_fetch = __toESM2(require_lib3());
+    var import_request_error = require_dist_node4();
     function getBufferResponse(response) {
       return response.arrayBuffer();
     }
     function fetchWrapper(requestOptions) {
       const log = requestOptions.request && requestOptions.request.log ? requestOptions.request.log : console;
-      if (isPlainObject.isPlainObject(requestOptions.body) || Array.isArray(requestOptions.body)) {
+      if ((0, import_is_plain_object.isPlainObject)(requestOptions.body) || Array.isArray(requestOptions.body)) {
         requestOptions.body = JSON.stringify(requestOptions.body);
       }
       let headers = {};
       let status;
       let url;
       const fetch = requestOptions.request && requestOptions.request.fetch || globalThis.fetch || /* istanbul ignore next */
-      nodeFetch;
-      return fetch(requestOptions.url, Object.assign(
-        {
-          method: requestOptions.method,
-          body: requestOptions.body,
-          headers: requestOptions.headers,
-          redirect: requestOptions.redirect
-        },
-        // `requestOptions.request.agent` type is incompatible
-        // see https://github.com/octokit/types.ts/pull/264
-        requestOptions.request
-      )).then(async (response) => {
+      import_node_fetch.default;
+      return fetch(
+        requestOptions.url,
+        Object.assign(
+          {
+            method: requestOptions.method,
+            body: requestOptions.body,
+            headers: requestOptions.headers,
+            redirect: requestOptions.redirect,
+            // duplex must be set if request.body is ReadableStream or Async Iterables.
+            // See https://fetch.spec.whatwg.org/#dom-requestinit-duplex.
+            ...requestOptions.body && { duplex: "half" }
+          },
+          // `requestOptions.request.agent` type is incompatible
+          // see https://github.com/octokit/types.ts/pull/264
+          requestOptions.request
+        )
+      ).then(async (response) => {
         url = response.url;
         status = response.status;
         for (const keyAndValue of response.headers) {
@@ -5858,7 +5974,9 @@ var require_dist_node5 = __commonJS({
         if ("deprecation" in headers) {
           const matches = headers.link && headers.link.match(/<([^>]+)>; rel="deprecation"/);
           const deprecationLink = matches && matches.pop();
-          log.warn(`[@octokit/request] "${requestOptions.method} ${requestOptions.url}" is deprecated. It is scheduled to be removed on ${headers.sunset}${deprecationLink ? `. See ${deprecationLink}` : ""}`);
+          log.warn(
+            `[@octokit/request] "${requestOptions.method} ${requestOptions.url}" is deprecated. It is scheduled to be removed on ${headers.sunset}${deprecationLink ? `. See ${deprecationLink}` : ""}`
+          );
         }
         if (status === 204 || status === 205) {
           return;
@@ -5867,7 +5985,7 @@ var require_dist_node5 = __commonJS({
           if (status < 400) {
             return;
           }
-          throw new requestError.RequestError(response.statusText, status, {
+          throw new import_request_error.RequestError(response.statusText, status, {
             response: {
               url,
               status,
@@ -5878,7 +5996,7 @@ var require_dist_node5 = __commonJS({
           });
         }
         if (status === 304) {
-          throw new requestError.RequestError("Not modified", status, {
+          throw new import_request_error.RequestError("Not modified", status, {
             response: {
               url,
               status,
@@ -5890,7 +6008,7 @@ var require_dist_node5 = __commonJS({
         }
         if (status >= 400) {
           const data = await getResponseData(response);
-          const error = new requestError.RequestError(toErrorMessage(data), status, {
+          const error = new import_request_error.RequestError(toErrorMessage(data), status, {
             response: {
               url,
               status,
@@ -5910,11 +6028,11 @@ var require_dist_node5 = __commonJS({
           data
         };
       }).catch((error) => {
-        if (error instanceof requestError.RequestError)
+        if (error instanceof import_request_error.RequestError)
           throw error;
         else if (error.name === "AbortError")
           throw error;
-        throw new requestError.RequestError(error.message, 500, {
+        throw new import_request_error.RequestError(error.message, 500, {
           request: requestOptions
         });
       });
@@ -5948,7 +6066,9 @@ var require_dist_node5 = __commonJS({
           return fetchWrapper(endpoint2.parse(endpointOptions));
         }
         const request2 = (route2, parameters2) => {
-          return fetchWrapper(endpoint2.parse(endpoint2.merge(route2, parameters2)));
+          return fetchWrapper(
+            endpoint2.parse(endpoint2.merge(route2, parameters2))
+          );
         };
         Object.assign(request2, {
           endpoint: endpoint2,
@@ -5961,23 +6081,45 @@ var require_dist_node5 = __commonJS({
         defaults: withDefaults.bind(null, endpoint2)
       });
     }
-    var request = withDefaults(endpoint.endpoint, {
+    var request = withDefaults(import_endpoint.endpoint, {
       headers: {
-        "user-agent": `octokit-request.js/${VERSION} ${universalUserAgent.getUserAgent()}`
+        "user-agent": `octokit-request.js/${VERSION} ${(0, import_universal_user_agent.getUserAgent)()}`
       }
     });
-    exports.request = request;
   }
 });
 
 // node_modules/@octokit/graphql/dist-node/index.js
 var require_dist_node6 = __commonJS({
-  "node_modules/@octokit/graphql/dist-node/index.js"(exports) {
+  "node_modules/@octokit/graphql/dist-node/index.js"(exports, module2) {
     "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    var request = require_dist_node5();
-    var universalUserAgent = require_dist_node();
-    var VERSION = "5.0.0";
+    var __defProp2 = Object.defineProperty;
+    var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
+    var __getOwnPropNames2 = Object.getOwnPropertyNames;
+    var __hasOwnProp2 = Object.prototype.hasOwnProperty;
+    var __export2 = (target, all) => {
+      for (var name in all)
+        __defProp2(target, name, { get: all[name], enumerable: true });
+    };
+    var __copyProps2 = (to, from, except, desc) => {
+      if (from && typeof from === "object" || typeof from === "function") {
+        for (let key of __getOwnPropNames2(from))
+          if (!__hasOwnProp2.call(to, key) && key !== except)
+            __defProp2(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc2(from, key)) || desc.enumerable });
+      }
+      return to;
+    };
+    var __toCommonJS2 = (mod) => __copyProps2(__defProp2({}, "__esModule", { value: true }), mod);
+    var dist_src_exports = {};
+    __export2(dist_src_exports, {
+      GraphqlResponseError: () => GraphqlResponseError,
+      graphql: () => graphql2,
+      withCustomRequest: () => withCustomRequest
+    });
+    module2.exports = __toCommonJS2(dist_src_exports);
+    var import_request = require_dist_node5();
+    var import_universal_user_agent = require_dist_node();
+    var VERSION = "5.0.6";
     function _buildMessageForResponseErrors(data) {
       return `Request failed due to following response errors:
 ` + data.errors.map((e) => ` - ${e.message}`).join("\n");
@@ -5996,24 +6138,36 @@ var require_dist_node6 = __commonJS({
         }
       }
     };
-    var NON_VARIABLE_OPTIONS = ["method", "baseUrl", "url", "headers", "request", "query", "mediaType"];
+    var NON_VARIABLE_OPTIONS = [
+      "method",
+      "baseUrl",
+      "url",
+      "headers",
+      "request",
+      "query",
+      "mediaType"
+    ];
     var FORBIDDEN_VARIABLE_OPTIONS = ["query", "method", "url"];
     var GHES_V3_SUFFIX_REGEX = /\/api\/v3\/?$/;
     function graphql(request2, query, options) {
       if (options) {
         if (typeof query === "string" && "query" in options) {
-          return Promise.reject(new Error(`[@octokit/graphql] "query" cannot be used as variable name`));
+          return Promise.reject(
+            new Error(`[@octokit/graphql] "query" cannot be used as variable name`)
+          );
         }
         for (const key in options) {
           if (!FORBIDDEN_VARIABLE_OPTIONS.includes(key))
             continue;
-          return Promise.reject(new Error(`[@octokit/graphql] "${key}" cannot be used as variable name`));
+          return Promise.reject(
+            new Error(`[@octokit/graphql] "${key}" cannot be used as variable name`)
+          );
         }
       }
-      const parsedOptions = typeof query === "string" ? Object.assign({
-        query
-      }, options) : query;
-      const requestOptions = Object.keys(parsedOptions).reduce((result, key) => {
+      const parsedOptions = typeof query === "string" ? Object.assign({ query }, options) : query;
+      const requestOptions = Object.keys(
+        parsedOptions
+      ).reduce((result, key) => {
         if (NON_VARIABLE_OPTIONS.includes(key)) {
           result[key] = parsedOptions[key];
           return result;
@@ -6034,24 +6188,28 @@ var require_dist_node6 = __commonJS({
           for (const key of Object.keys(response.headers)) {
             headers[key] = response.headers[key];
           }
-          throw new GraphqlResponseError(requestOptions, headers, response.data);
+          throw new GraphqlResponseError(
+            requestOptions,
+            headers,
+            response.data
+          );
         }
         return response.data.data;
       });
     }
-    function withDefaults(request$1, newDefaults) {
-      const newRequest = request$1.defaults(newDefaults);
+    function withDefaults(request2, newDefaults) {
+      const newRequest = request2.defaults(newDefaults);
       const newApi = (query, options) => {
         return graphql(newRequest, query, options);
       };
       return Object.assign(newApi, {
         defaults: withDefaults.bind(null, newRequest),
-        endpoint: request.request.endpoint
+        endpoint: newRequest.endpoint
       });
     }
-    var graphql$1 = withDefaults(request.request, {
+    var graphql2 = withDefaults(import_request.request, {
       headers: {
-        "user-agent": `octokit-graphql.js/${VERSION} ${universalUserAgent.getUserAgent()}`
+        "user-agent": `octokit-graphql.js/${VERSION} ${(0, import_universal_user_agent.getUserAgent)()}`
       },
       method: "POST",
       url: "/graphql"
@@ -6062,9 +6220,6 @@ var require_dist_node6 = __commonJS({
         url: "/graphql"
       });
     }
-    exports.GraphqlResponseError = GraphqlResponseError;
-    exports.graphql = graphql$1;
-    exports.withCustomRequest = withCustomRequest;
   }
 });
 
@@ -6116,85 +6271,37 @@ var require_dist_node7 = __commonJS({
 
 // node_modules/@octokit/core/dist-node/index.js
 var require_dist_node8 = __commonJS({
-  "node_modules/@octokit/core/dist-node/index.js"(exports) {
+  "node_modules/@octokit/core/dist-node/index.js"(exports, module2) {
     "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    var universalUserAgent = require_dist_node();
-    var beforeAfterHook = require_before_after_hook();
-    var request = require_dist_node5();
-    var graphql = require_dist_node6();
-    var authToken = require_dist_node7();
-    var VERSION = "4.0.4";
-    var Octokit2 = class {
-      constructor(options = {}) {
-        const hook = new beforeAfterHook.Collection();
-        const requestDefaults = {
-          baseUrl: request.request.endpoint.DEFAULTS.baseUrl,
-          headers: {},
-          request: Object.assign({}, options.request, {
-            // @ts-ignore internal usage only, no need to type
-            hook: hook.bind(null, "request")
-          }),
-          mediaType: {
-            previews: [],
-            format: ""
-          }
-        };
-        requestDefaults.headers["user-agent"] = [options.userAgent, `octokit-core.js/${VERSION} ${universalUserAgent.getUserAgent()}`].filter(Boolean).join(" ");
-        if (options.baseUrl) {
-          requestDefaults.baseUrl = options.baseUrl;
-        }
-        if (options.previews) {
-          requestDefaults.mediaType.previews = options.previews;
-        }
-        if (options.timeZone) {
-          requestDefaults.headers["time-zone"] = options.timeZone;
-        }
-        this.request = request.request.defaults(requestDefaults);
-        this.graphql = graphql.withCustomRequest(this.request).defaults(requestDefaults);
-        this.log = Object.assign({
-          debug: () => {
-          },
-          info: () => {
-          },
-          warn: console.warn.bind(console),
-          error: console.error.bind(console)
-        }, options.log);
-        this.hook = hook;
-        if (!options.authStrategy) {
-          if (!options.auth) {
-            this.auth = async () => ({
-              type: "unauthenticated"
-            });
-          } else {
-            const auth = authToken.createTokenAuth(options.auth);
-            hook.wrap("request", auth.hook);
-            this.auth = auth;
-          }
-        } else {
-          const {
-            authStrategy,
-            ...otherOptions
-          } = options;
-          const auth = authStrategy(Object.assign({
-            request: this.request,
-            log: this.log,
-            // we pass the current octokit instance as well as its constructor options
-            // to allow for authentication strategies that return a new octokit instance
-            // that shares the same internal state as the current one. The original
-            // requirement for this was the "event-octokit" authentication strategy
-            // of https://github.com/probot/octokit-auth-probot.
-            octokit: this,
-            octokitOptions: otherOptions
-          }, options.auth));
-          hook.wrap("request", auth.hook);
-          this.auth = auth;
-        }
-        const classConstructor = this.constructor;
-        classConstructor.plugins.forEach((plugin) => {
-          Object.assign(this, plugin(this, options));
-        });
+    var __defProp2 = Object.defineProperty;
+    var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
+    var __getOwnPropNames2 = Object.getOwnPropertyNames;
+    var __hasOwnProp2 = Object.prototype.hasOwnProperty;
+    var __export2 = (target, all) => {
+      for (var name in all)
+        __defProp2(target, name, { get: all[name], enumerable: true });
+    };
+    var __copyProps2 = (to, from, except, desc) => {
+      if (from && typeof from === "object" || typeof from === "function") {
+        for (let key of __getOwnPropNames2(from))
+          if (!__hasOwnProp2.call(to, key) && key !== except)
+            __defProp2(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc2(from, key)) || desc.enumerable });
       }
+      return to;
+    };
+    var __toCommonJS2 = (mod) => __copyProps2(__defProp2({}, "__esModule", { value: true }), mod);
+    var dist_src_exports = {};
+    __export2(dist_src_exports, {
+      Octokit: () => Octokit2
+    });
+    module2.exports = __toCommonJS2(dist_src_exports);
+    var import_universal_user_agent = require_dist_node();
+    var import_before_after_hook = require_before_after_hook();
+    var import_request = require_dist_node5();
+    var import_graphql = require_dist_node6();
+    var import_auth_token = require_dist_node7();
+    var VERSION = "4.2.1";
+    var Octokit2 = class {
       static defaults(defaults) {
         const OctokitWithDefaults = class extends this {
           constructor(...args) {
@@ -6203,9 +6310,16 @@ var require_dist_node8 = __commonJS({
               super(defaults(options));
               return;
             }
-            super(Object.assign({}, defaults, options, options.userAgent && defaults.userAgent ? {
-              userAgent: `${options.userAgent} ${defaults.userAgent}`
-            } : null));
+            super(
+              Object.assign(
+                {},
+                defaults,
+                options,
+                options.userAgent && defaults.userAgent ? {
+                  userAgent: `${options.userAgent} ${defaults.userAgent}`
+                } : null
+              )
+            );
           }
         };
         return OctokitWithDefaults;
@@ -6220,22 +6334,124 @@ var require_dist_node8 = __commonJS({
         var _a;
         const currentPlugins = this.plugins;
         const NewOctokit = (_a = class extends this {
-        }, _a.plugins = currentPlugins.concat(newPlugins.filter((plugin) => !currentPlugins.includes(plugin))), _a);
+        }, _a.plugins = currentPlugins.concat(
+          newPlugins.filter((plugin) => !currentPlugins.includes(plugin))
+        ), _a);
         return NewOctokit;
+      }
+      constructor(options = {}) {
+        const hook = new import_before_after_hook.Collection();
+        const requestDefaults = {
+          baseUrl: import_request.request.endpoint.DEFAULTS.baseUrl,
+          headers: {},
+          request: Object.assign({}, options.request, {
+            // @ts-ignore internal usage only, no need to type
+            hook: hook.bind(null, "request")
+          }),
+          mediaType: {
+            previews: [],
+            format: ""
+          }
+        };
+        requestDefaults.headers["user-agent"] = [
+          options.userAgent,
+          `octokit-core.js/${VERSION} ${(0, import_universal_user_agent.getUserAgent)()}`
+        ].filter(Boolean).join(" ");
+        if (options.baseUrl) {
+          requestDefaults.baseUrl = options.baseUrl;
+        }
+        if (options.previews) {
+          requestDefaults.mediaType.previews = options.previews;
+        }
+        if (options.timeZone) {
+          requestDefaults.headers["time-zone"] = options.timeZone;
+        }
+        this.request = import_request.request.defaults(requestDefaults);
+        this.graphql = (0, import_graphql.withCustomRequest)(this.request).defaults(requestDefaults);
+        this.log = Object.assign(
+          {
+            debug: () => {
+            },
+            info: () => {
+            },
+            warn: console.warn.bind(console),
+            error: console.error.bind(console)
+          },
+          options.log
+        );
+        this.hook = hook;
+        if (!options.authStrategy) {
+          if (!options.auth) {
+            this.auth = async () => ({
+              type: "unauthenticated"
+            });
+          } else {
+            const auth = (0, import_auth_token.createTokenAuth)(options.auth);
+            hook.wrap("request", auth.hook);
+            this.auth = auth;
+          }
+        } else {
+          const { authStrategy, ...otherOptions } = options;
+          const auth = authStrategy(
+            Object.assign(
+              {
+                request: this.request,
+                log: this.log,
+                // we pass the current octokit instance as well as its constructor options
+                // to allow for authentication strategies that return a new octokit instance
+                // that shares the same internal state as the current one. The original
+                // requirement for this was the "event-octokit" authentication strategy
+                // of https://github.com/probot/octokit-auth-probot.
+                octokit: this,
+                octokitOptions: otherOptions
+              },
+              options.auth
+            )
+          );
+          hook.wrap("request", auth.hook);
+          this.auth = auth;
+        }
+        const classConstructor = this.constructor;
+        classConstructor.plugins.forEach((plugin) => {
+          Object.assign(this, plugin(this, options));
+        });
       }
     };
     Octokit2.VERSION = VERSION;
     Octokit2.plugins = [];
-    exports.Octokit = Octokit2;
   }
 });
 
 // node_modules/@octokit/plugin-paginate-rest/dist-node/index.js
 var require_dist_node9 = __commonJS({
-  "node_modules/@octokit/plugin-paginate-rest/dist-node/index.js"(exports) {
+  "node_modules/@octokit/plugin-paginate-rest/dist-node/index.js"(exports, module2) {
     "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    var VERSION = "5.0.1";
+    var __defProp2 = Object.defineProperty;
+    var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
+    var __getOwnPropNames2 = Object.getOwnPropertyNames;
+    var __hasOwnProp2 = Object.prototype.hasOwnProperty;
+    var __export2 = (target, all) => {
+      for (var name in all)
+        __defProp2(target, name, { get: all[name], enumerable: true });
+    };
+    var __copyProps2 = (to, from, except, desc) => {
+      if (from && typeof from === "object" || typeof from === "function") {
+        for (let key of __getOwnPropNames2(from))
+          if (!__hasOwnProp2.call(to, key) && key !== except)
+            __defProp2(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc2(from, key)) || desc.enumerable });
+      }
+      return to;
+    };
+    var __toCommonJS2 = (mod) => __copyProps2(__defProp2({}, "__esModule", { value: true }), mod);
+    var dist_src_exports = {};
+    __export2(dist_src_exports, {
+      composePaginateRest: () => composePaginateRest,
+      isPaginatingEndpoint: () => isPaginatingEndpoint,
+      paginateRest: () => paginateRest,
+      paginatingEndpoints: () => paginatingEndpoints
+    });
+    module2.exports = __toCommonJS2(dist_src_exports);
+    var VERSION = "6.1.2";
     function normalizePaginatedListResponse(response) {
       if (!response.data) {
         return {
@@ -6274,20 +6490,14 @@ var require_dist_node9 = __commonJS({
         [Symbol.asyncIterator]: () => ({
           async next() {
             if (!url)
-              return {
-                done: true
-              };
+              return { done: true };
             try {
-              const response = await requestMethod({
-                method,
-                url,
-                headers
-              });
+              const response = await requestMethod({ method, url, headers });
               const normalizedResponse = normalizePaginatedListResponse(response);
-              url = ((normalizedResponse.headers.link || "").match(/<([^>]+)>;\s*rel="next"/) || [])[1];
-              return {
-                value: normalizedResponse
-              };
+              url = ((normalizedResponse.headers.link || "").match(
+                /<([^>]+)>;\s*rel="next"/
+              ) || [])[1];
+              return { value: normalizedResponse };
             } catch (error) {
               if (error.status !== 409)
                 throw error;
@@ -6309,7 +6519,12 @@ var require_dist_node9 = __commonJS({
         mapFn = parameters;
         parameters = void 0;
       }
-      return gather(octokit, [], iterator(octokit, route, parameters)[Symbol.asyncIterator](), mapFn);
+      return gather(
+        octokit,
+        [],
+        iterator(octokit, route, parameters)[Symbol.asyncIterator](),
+        mapFn
+      );
     }
     function gather(octokit, results, iterator2, mapFn) {
       return iterator2.next().then((result) => {
@@ -6320,7 +6535,9 @@ var require_dist_node9 = __commonJS({
         function done() {
           earlyExit = true;
         }
-        results = results.concat(mapFn ? mapFn(result.value, done) : result.value.data);
+        results = results.concat(
+          mapFn ? mapFn(result.value, done) : result.value.data
+        );
         if (earlyExit) {
           return results;
         }
@@ -6330,7 +6547,230 @@ var require_dist_node9 = __commonJS({
     var composePaginateRest = Object.assign(paginate, {
       iterator
     });
-    var paginatingEndpoints = ["GET /app/hook/deliveries", "GET /app/installations", "GET /enterprises/{enterprise}/actions/permissions/organizations", "GET /enterprises/{enterprise}/actions/runner-groups", "GET /enterprises/{enterprise}/actions/runner-groups/{runner_group_id}/organizations", "GET /enterprises/{enterprise}/actions/runner-groups/{runner_group_id}/runners", "GET /enterprises/{enterprise}/actions/runners", "GET /enterprises/{enterprise}/code-scanning/alerts", "GET /enterprises/{enterprise}/secret-scanning/alerts", "GET /enterprises/{enterprise}/settings/billing/advanced-security", "GET /events", "GET /gists", "GET /gists/public", "GET /gists/starred", "GET /gists/{gist_id}/comments", "GET /gists/{gist_id}/commits", "GET /gists/{gist_id}/forks", "GET /installation/repositories", "GET /issues", "GET /licenses", "GET /marketplace_listing/plans", "GET /marketplace_listing/plans/{plan_id}/accounts", "GET /marketplace_listing/stubbed/plans", "GET /marketplace_listing/stubbed/plans/{plan_id}/accounts", "GET /networks/{owner}/{repo}/events", "GET /notifications", "GET /organizations", "GET /organizations/{org}/codespaces/secrets", "GET /organizations/{org}/codespaces/secrets/{secret_name}/repositories", "GET /orgs/{org}/actions/cache/usage-by-repository", "GET /orgs/{org}/actions/permissions/repositories", "GET /orgs/{org}/actions/runner-groups", "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/repositories", "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/runners", "GET /orgs/{org}/actions/runners", "GET /orgs/{org}/actions/secrets", "GET /orgs/{org}/actions/secrets/{secret_name}/repositories", "GET /orgs/{org}/blocks", "GET /orgs/{org}/code-scanning/alerts", "GET /orgs/{org}/codespaces", "GET /orgs/{org}/dependabot/secrets", "GET /orgs/{org}/dependabot/secrets/{secret_name}/repositories", "GET /orgs/{org}/events", "GET /orgs/{org}/failed_invitations", "GET /orgs/{org}/hooks", "GET /orgs/{org}/hooks/{hook_id}/deliveries", "GET /orgs/{org}/installations", "GET /orgs/{org}/invitations", "GET /orgs/{org}/invitations/{invitation_id}/teams", "GET /orgs/{org}/issues", "GET /orgs/{org}/members", "GET /orgs/{org}/migrations", "GET /orgs/{org}/migrations/{migration_id}/repositories", "GET /orgs/{org}/outside_collaborators", "GET /orgs/{org}/packages", "GET /orgs/{org}/packages/{package_type}/{package_name}/versions", "GET /orgs/{org}/projects", "GET /orgs/{org}/public_members", "GET /orgs/{org}/repos", "GET /orgs/{org}/secret-scanning/alerts", "GET /orgs/{org}/settings/billing/advanced-security", "GET /orgs/{org}/teams", "GET /orgs/{org}/teams/{team_slug}/discussions", "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments", "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments/{comment_number}/reactions", "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/reactions", "GET /orgs/{org}/teams/{team_slug}/invitations", "GET /orgs/{org}/teams/{team_slug}/members", "GET /orgs/{org}/teams/{team_slug}/projects", "GET /orgs/{org}/teams/{team_slug}/repos", "GET /orgs/{org}/teams/{team_slug}/teams", "GET /projects/columns/{column_id}/cards", "GET /projects/{project_id}/collaborators", "GET /projects/{project_id}/columns", "GET /repos/{owner}/{repo}/actions/artifacts", "GET /repos/{owner}/{repo}/actions/caches", "GET /repos/{owner}/{repo}/actions/runners", "GET /repos/{owner}/{repo}/actions/runs", "GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts", "GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs", "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs", "GET /repos/{owner}/{repo}/actions/secrets", "GET /repos/{owner}/{repo}/actions/workflows", "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs", "GET /repos/{owner}/{repo}/assignees", "GET /repos/{owner}/{repo}/branches", "GET /repos/{owner}/{repo}/check-runs/{check_run_id}/annotations", "GET /repos/{owner}/{repo}/check-suites/{check_suite_id}/check-runs", "GET /repos/{owner}/{repo}/code-scanning/alerts", "GET /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/instances", "GET /repos/{owner}/{repo}/code-scanning/analyses", "GET /repos/{owner}/{repo}/codespaces", "GET /repos/{owner}/{repo}/codespaces/devcontainers", "GET /repos/{owner}/{repo}/codespaces/secrets", "GET /repos/{owner}/{repo}/collaborators", "GET /repos/{owner}/{repo}/comments", "GET /repos/{owner}/{repo}/comments/{comment_id}/reactions", "GET /repos/{owner}/{repo}/commits", "GET /repos/{owner}/{repo}/commits/{commit_sha}/comments", "GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls", "GET /repos/{owner}/{repo}/commits/{ref}/check-runs", "GET /repos/{owner}/{repo}/commits/{ref}/check-suites", "GET /repos/{owner}/{repo}/commits/{ref}/status", "GET /repos/{owner}/{repo}/commits/{ref}/statuses", "GET /repos/{owner}/{repo}/contributors", "GET /repos/{owner}/{repo}/dependabot/alerts", "GET /repos/{owner}/{repo}/dependabot/secrets", "GET /repos/{owner}/{repo}/deployments", "GET /repos/{owner}/{repo}/deployments/{deployment_id}/statuses", "GET /repos/{owner}/{repo}/environments", "GET /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies", "GET /repos/{owner}/{repo}/events", "GET /repos/{owner}/{repo}/forks", "GET /repos/{owner}/{repo}/hooks", "GET /repos/{owner}/{repo}/hooks/{hook_id}/deliveries", "GET /repos/{owner}/{repo}/invitations", "GET /repos/{owner}/{repo}/issues", "GET /repos/{owner}/{repo}/issues/comments", "GET /repos/{owner}/{repo}/issues/comments/{comment_id}/reactions", "GET /repos/{owner}/{repo}/issues/events", "GET /repos/{owner}/{repo}/issues/{issue_number}/comments", "GET /repos/{owner}/{repo}/issues/{issue_number}/events", "GET /repos/{owner}/{repo}/issues/{issue_number}/labels", "GET /repos/{owner}/{repo}/issues/{issue_number}/reactions", "GET /repos/{owner}/{repo}/issues/{issue_number}/timeline", "GET /repos/{owner}/{repo}/keys", "GET /repos/{owner}/{repo}/labels", "GET /repos/{owner}/{repo}/milestones", "GET /repos/{owner}/{repo}/milestones/{milestone_number}/labels", "GET /repos/{owner}/{repo}/notifications", "GET /repos/{owner}/{repo}/pages/builds", "GET /repos/{owner}/{repo}/projects", "GET /repos/{owner}/{repo}/pulls", "GET /repos/{owner}/{repo}/pulls/comments", "GET /repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions", "GET /repos/{owner}/{repo}/pulls/{pull_number}/comments", "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits", "GET /repos/{owner}/{repo}/pulls/{pull_number}/files", "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/comments", "GET /repos/{owner}/{repo}/releases", "GET /repos/{owner}/{repo}/releases/{release_id}/assets", "GET /repos/{owner}/{repo}/releases/{release_id}/reactions", "GET /repos/{owner}/{repo}/secret-scanning/alerts", "GET /repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}/locations", "GET /repos/{owner}/{repo}/stargazers", "GET /repos/{owner}/{repo}/subscribers", "GET /repos/{owner}/{repo}/tags", "GET /repos/{owner}/{repo}/teams", "GET /repos/{owner}/{repo}/topics", "GET /repositories", "GET /repositories/{repository_id}/environments/{environment_name}/secrets", "GET /search/code", "GET /search/commits", "GET /search/issues", "GET /search/labels", "GET /search/repositories", "GET /search/topics", "GET /search/users", "GET /teams/{team_id}/discussions", "GET /teams/{team_id}/discussions/{discussion_number}/comments", "GET /teams/{team_id}/discussions/{discussion_number}/comments/{comment_number}/reactions", "GET /teams/{team_id}/discussions/{discussion_number}/reactions", "GET /teams/{team_id}/invitations", "GET /teams/{team_id}/members", "GET /teams/{team_id}/projects", "GET /teams/{team_id}/repos", "GET /teams/{team_id}/teams", "GET /user/blocks", "GET /user/codespaces", "GET /user/codespaces/secrets", "GET /user/emails", "GET /user/followers", "GET /user/following", "GET /user/gpg_keys", "GET /user/installations", "GET /user/installations/{installation_id}/repositories", "GET /user/issues", "GET /user/keys", "GET /user/marketplace_purchases", "GET /user/marketplace_purchases/stubbed", "GET /user/memberships/orgs", "GET /user/migrations", "GET /user/migrations/{migration_id}/repositories", "GET /user/orgs", "GET /user/packages", "GET /user/packages/{package_type}/{package_name}/versions", "GET /user/public_emails", "GET /user/repos", "GET /user/repository_invitations", "GET /user/ssh_signing_keys", "GET /user/starred", "GET /user/subscriptions", "GET /user/teams", "GET /users", "GET /users/{username}/events", "GET /users/{username}/events/orgs/{org}", "GET /users/{username}/events/public", "GET /users/{username}/followers", "GET /users/{username}/following", "GET /users/{username}/gists", "GET /users/{username}/gpg_keys", "GET /users/{username}/keys", "GET /users/{username}/orgs", "GET /users/{username}/packages", "GET /users/{username}/projects", "GET /users/{username}/received_events", "GET /users/{username}/received_events/public", "GET /users/{username}/repos", "GET /users/{username}/ssh_signing_keys", "GET /users/{username}/starred", "GET /users/{username}/subscriptions"];
+    var paginatingEndpoints = [
+      "GET /app/hook/deliveries",
+      "GET /app/installation-requests",
+      "GET /app/installations",
+      "GET /enterprises/{enterprise}/dependabot/alerts",
+      "GET /enterprises/{enterprise}/secret-scanning/alerts",
+      "GET /events",
+      "GET /gists",
+      "GET /gists/public",
+      "GET /gists/starred",
+      "GET /gists/{gist_id}/comments",
+      "GET /gists/{gist_id}/commits",
+      "GET /gists/{gist_id}/forks",
+      "GET /installation/repositories",
+      "GET /issues",
+      "GET /licenses",
+      "GET /marketplace_listing/plans",
+      "GET /marketplace_listing/plans/{plan_id}/accounts",
+      "GET /marketplace_listing/stubbed/plans",
+      "GET /marketplace_listing/stubbed/plans/{plan_id}/accounts",
+      "GET /networks/{owner}/{repo}/events",
+      "GET /notifications",
+      "GET /organizations",
+      "GET /organizations/{org}/personal-access-token-requests",
+      "GET /organizations/{org}/personal-access-token-requests/{pat_request_id}/repositories",
+      "GET /organizations/{org}/personal-access-tokens",
+      "GET /organizations/{org}/personal-access-tokens/{pat_id}/repositories",
+      "GET /orgs/{org}/actions/cache/usage-by-repository",
+      "GET /orgs/{org}/actions/permissions/repositories",
+      "GET /orgs/{org}/actions/required_workflows",
+      "GET /orgs/{org}/actions/runners",
+      "GET /orgs/{org}/actions/secrets",
+      "GET /orgs/{org}/actions/secrets/{secret_name}/repositories",
+      "GET /orgs/{org}/actions/variables",
+      "GET /orgs/{org}/actions/variables/{name}/repositories",
+      "GET /orgs/{org}/blocks",
+      "GET /orgs/{org}/code-scanning/alerts",
+      "GET /orgs/{org}/codespaces",
+      "GET /orgs/{org}/codespaces/secrets",
+      "GET /orgs/{org}/codespaces/secrets/{secret_name}/repositories",
+      "GET /orgs/{org}/dependabot/alerts",
+      "GET /orgs/{org}/dependabot/secrets",
+      "GET /orgs/{org}/dependabot/secrets/{secret_name}/repositories",
+      "GET /orgs/{org}/events",
+      "GET /orgs/{org}/failed_invitations",
+      "GET /orgs/{org}/hooks",
+      "GET /orgs/{org}/hooks/{hook_id}/deliveries",
+      "GET /orgs/{org}/installations",
+      "GET /orgs/{org}/invitations",
+      "GET /orgs/{org}/invitations/{invitation_id}/teams",
+      "GET /orgs/{org}/issues",
+      "GET /orgs/{org}/members",
+      "GET /orgs/{org}/members/{username}/codespaces",
+      "GET /orgs/{org}/migrations",
+      "GET /orgs/{org}/migrations/{migration_id}/repositories",
+      "GET /orgs/{org}/outside_collaborators",
+      "GET /orgs/{org}/packages",
+      "GET /orgs/{org}/packages/{package_type}/{package_name}/versions",
+      "GET /orgs/{org}/projects",
+      "GET /orgs/{org}/public_members",
+      "GET /orgs/{org}/repos",
+      "GET /orgs/{org}/secret-scanning/alerts",
+      "GET /orgs/{org}/teams",
+      "GET /orgs/{org}/teams/{team_slug}/discussions",
+      "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments",
+      "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments/{comment_number}/reactions",
+      "GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/reactions",
+      "GET /orgs/{org}/teams/{team_slug}/invitations",
+      "GET /orgs/{org}/teams/{team_slug}/members",
+      "GET /orgs/{org}/teams/{team_slug}/projects",
+      "GET /orgs/{org}/teams/{team_slug}/repos",
+      "GET /orgs/{org}/teams/{team_slug}/teams",
+      "GET /projects/columns/{column_id}/cards",
+      "GET /projects/{project_id}/collaborators",
+      "GET /projects/{project_id}/columns",
+      "GET /repos/{org}/{repo}/actions/required_workflows",
+      "GET /repos/{owner}/{repo}/actions/artifacts",
+      "GET /repos/{owner}/{repo}/actions/caches",
+      "GET /repos/{owner}/{repo}/actions/organization-secrets",
+      "GET /repos/{owner}/{repo}/actions/organization-variables",
+      "GET /repos/{owner}/{repo}/actions/required_workflows/{required_workflow_id_for_repo}/runs",
+      "GET /repos/{owner}/{repo}/actions/runners",
+      "GET /repos/{owner}/{repo}/actions/runs",
+      "GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts",
+      "GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs",
+      "GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs",
+      "GET /repos/{owner}/{repo}/actions/secrets",
+      "GET /repos/{owner}/{repo}/actions/variables",
+      "GET /repos/{owner}/{repo}/actions/workflows",
+      "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs",
+      "GET /repos/{owner}/{repo}/assignees",
+      "GET /repos/{owner}/{repo}/branches",
+      "GET /repos/{owner}/{repo}/check-runs/{check_run_id}/annotations",
+      "GET /repos/{owner}/{repo}/check-suites/{check_suite_id}/check-runs",
+      "GET /repos/{owner}/{repo}/code-scanning/alerts",
+      "GET /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/instances",
+      "GET /repos/{owner}/{repo}/code-scanning/analyses",
+      "GET /repos/{owner}/{repo}/codespaces",
+      "GET /repos/{owner}/{repo}/codespaces/devcontainers",
+      "GET /repos/{owner}/{repo}/codespaces/secrets",
+      "GET /repos/{owner}/{repo}/collaborators",
+      "GET /repos/{owner}/{repo}/comments",
+      "GET /repos/{owner}/{repo}/comments/{comment_id}/reactions",
+      "GET /repos/{owner}/{repo}/commits",
+      "GET /repos/{owner}/{repo}/commits/{commit_sha}/comments",
+      "GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls",
+      "GET /repos/{owner}/{repo}/commits/{ref}/check-runs",
+      "GET /repos/{owner}/{repo}/commits/{ref}/check-suites",
+      "GET /repos/{owner}/{repo}/commits/{ref}/status",
+      "GET /repos/{owner}/{repo}/commits/{ref}/statuses",
+      "GET /repos/{owner}/{repo}/contributors",
+      "GET /repos/{owner}/{repo}/dependabot/alerts",
+      "GET /repos/{owner}/{repo}/dependabot/secrets",
+      "GET /repos/{owner}/{repo}/deployments",
+      "GET /repos/{owner}/{repo}/deployments/{deployment_id}/statuses",
+      "GET /repos/{owner}/{repo}/environments",
+      "GET /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies",
+      "GET /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/apps",
+      "GET /repos/{owner}/{repo}/events",
+      "GET /repos/{owner}/{repo}/forks",
+      "GET /repos/{owner}/{repo}/hooks",
+      "GET /repos/{owner}/{repo}/hooks/{hook_id}/deliveries",
+      "GET /repos/{owner}/{repo}/invitations",
+      "GET /repos/{owner}/{repo}/issues",
+      "GET /repos/{owner}/{repo}/issues/comments",
+      "GET /repos/{owner}/{repo}/issues/comments/{comment_id}/reactions",
+      "GET /repos/{owner}/{repo}/issues/events",
+      "GET /repos/{owner}/{repo}/issues/{issue_number}/comments",
+      "GET /repos/{owner}/{repo}/issues/{issue_number}/events",
+      "GET /repos/{owner}/{repo}/issues/{issue_number}/labels",
+      "GET /repos/{owner}/{repo}/issues/{issue_number}/reactions",
+      "GET /repos/{owner}/{repo}/issues/{issue_number}/timeline",
+      "GET /repos/{owner}/{repo}/keys",
+      "GET /repos/{owner}/{repo}/labels",
+      "GET /repos/{owner}/{repo}/milestones",
+      "GET /repos/{owner}/{repo}/milestones/{milestone_number}/labels",
+      "GET /repos/{owner}/{repo}/notifications",
+      "GET /repos/{owner}/{repo}/pages/builds",
+      "GET /repos/{owner}/{repo}/projects",
+      "GET /repos/{owner}/{repo}/pulls",
+      "GET /repos/{owner}/{repo}/pulls/comments",
+      "GET /repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions",
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/comments",
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits",
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/files",
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/comments",
+      "GET /repos/{owner}/{repo}/releases",
+      "GET /repos/{owner}/{repo}/releases/{release_id}/assets",
+      "GET /repos/{owner}/{repo}/releases/{release_id}/reactions",
+      "GET /repos/{owner}/{repo}/secret-scanning/alerts",
+      "GET /repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}/locations",
+      "GET /repos/{owner}/{repo}/security-advisories",
+      "GET /repos/{owner}/{repo}/stargazers",
+      "GET /repos/{owner}/{repo}/subscribers",
+      "GET /repos/{owner}/{repo}/tags",
+      "GET /repos/{owner}/{repo}/teams",
+      "GET /repos/{owner}/{repo}/topics",
+      "GET /repositories",
+      "GET /repositories/{repository_id}/environments/{environment_name}/secrets",
+      "GET /repositories/{repository_id}/environments/{environment_name}/variables",
+      "GET /search/code",
+      "GET /search/commits",
+      "GET /search/issues",
+      "GET /search/labels",
+      "GET /search/repositories",
+      "GET /search/topics",
+      "GET /search/users",
+      "GET /teams/{team_id}/discussions",
+      "GET /teams/{team_id}/discussions/{discussion_number}/comments",
+      "GET /teams/{team_id}/discussions/{discussion_number}/comments/{comment_number}/reactions",
+      "GET /teams/{team_id}/discussions/{discussion_number}/reactions",
+      "GET /teams/{team_id}/invitations",
+      "GET /teams/{team_id}/members",
+      "GET /teams/{team_id}/projects",
+      "GET /teams/{team_id}/repos",
+      "GET /teams/{team_id}/teams",
+      "GET /user/blocks",
+      "GET /user/codespaces",
+      "GET /user/codespaces/secrets",
+      "GET /user/emails",
+      "GET /user/followers",
+      "GET /user/following",
+      "GET /user/gpg_keys",
+      "GET /user/installations",
+      "GET /user/installations/{installation_id}/repositories",
+      "GET /user/issues",
+      "GET /user/keys",
+      "GET /user/marketplace_purchases",
+      "GET /user/marketplace_purchases/stubbed",
+      "GET /user/memberships/orgs",
+      "GET /user/migrations",
+      "GET /user/migrations/{migration_id}/repositories",
+      "GET /user/orgs",
+      "GET /user/packages",
+      "GET /user/packages/{package_type}/{package_name}/versions",
+      "GET /user/public_emails",
+      "GET /user/repos",
+      "GET /user/repository_invitations",
+      "GET /user/social_accounts",
+      "GET /user/ssh_signing_keys",
+      "GET /user/starred",
+      "GET /user/subscriptions",
+      "GET /user/teams",
+      "GET /users",
+      "GET /users/{username}/events",
+      "GET /users/{username}/events/orgs/{org}",
+      "GET /users/{username}/events/public",
+      "GET /users/{username}/followers",
+      "GET /users/{username}/following",
+      "GET /users/{username}/gists",
+      "GET /users/{username}/gpg_keys",
+      "GET /users/{username}/keys",
+      "GET /users/{username}/orgs",
+      "GET /users/{username}/packages",
+      "GET /users/{username}/projects",
+      "GET /users/{username}/received_events",
+      "GET /users/{username}/received_events/public",
+      "GET /users/{username}/repos",
+      "GET /users/{username}/social_accounts",
+      "GET /users/{username}/ssh_signing_keys",
+      "GET /users/{username}/starred",
+      "GET /users/{username}/subscriptions"
+    ];
     function isPaginatingEndpoint(arg) {
       if (typeof arg === "string") {
         return paginatingEndpoints.includes(arg);
@@ -6346,10 +6786,6 @@ var require_dist_node9 = __commonJS({
       };
     }
     paginateRest.VERSION = VERSION;
-    exports.composePaginateRest = composePaginateRest;
-    exports.isPaginatingEndpoint = isPaginatingEndpoint;
-    exports.paginateRest = paginateRest;
-    exports.paginatingEndpoints = paginatingEndpoints;
   }
 });
 
@@ -6363,22 +6799,32 @@ var require_dist_node10 = __commonJS({
         addCustomLabelsToSelfHostedRunnerForOrg: ["POST /orgs/{org}/actions/runners/{runner_id}/labels"],
         addCustomLabelsToSelfHostedRunnerForRepo: ["POST /repos/{owner}/{repo}/actions/runners/{runner_id}/labels"],
         addSelectedRepoToOrgSecret: ["PUT /orgs/{org}/actions/secrets/{secret_name}/repositories/{repository_id}"],
+        addSelectedRepoToOrgVariable: ["PUT /orgs/{org}/actions/variables/{name}/repositories/{repository_id}"],
+        addSelectedRepoToRequiredWorkflow: ["PUT /orgs/{org}/actions/required_workflows/{required_workflow_id}/repositories/{repository_id}"],
         approveWorkflowRun: ["POST /repos/{owner}/{repo}/actions/runs/{run_id}/approve"],
         cancelWorkflowRun: ["POST /repos/{owner}/{repo}/actions/runs/{run_id}/cancel"],
+        createEnvironmentVariable: ["POST /repositories/{repository_id}/environments/{environment_name}/variables"],
         createOrUpdateEnvironmentSecret: ["PUT /repositories/{repository_id}/environments/{environment_name}/secrets/{secret_name}"],
         createOrUpdateOrgSecret: ["PUT /orgs/{org}/actions/secrets/{secret_name}"],
         createOrUpdateRepoSecret: ["PUT /repos/{owner}/{repo}/actions/secrets/{secret_name}"],
+        createOrgVariable: ["POST /orgs/{org}/actions/variables"],
         createRegistrationTokenForOrg: ["POST /orgs/{org}/actions/runners/registration-token"],
         createRegistrationTokenForRepo: ["POST /repos/{owner}/{repo}/actions/runners/registration-token"],
         createRemoveTokenForOrg: ["POST /orgs/{org}/actions/runners/remove-token"],
         createRemoveTokenForRepo: ["POST /repos/{owner}/{repo}/actions/runners/remove-token"],
+        createRepoVariable: ["POST /repos/{owner}/{repo}/actions/variables"],
+        createRequiredWorkflow: ["POST /orgs/{org}/actions/required_workflows"],
         createWorkflowDispatch: ["POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches"],
         deleteActionsCacheById: ["DELETE /repos/{owner}/{repo}/actions/caches/{cache_id}"],
         deleteActionsCacheByKey: ["DELETE /repos/{owner}/{repo}/actions/caches{?key,ref}"],
         deleteArtifact: ["DELETE /repos/{owner}/{repo}/actions/artifacts/{artifact_id}"],
         deleteEnvironmentSecret: ["DELETE /repositories/{repository_id}/environments/{environment_name}/secrets/{secret_name}"],
+        deleteEnvironmentVariable: ["DELETE /repositories/{repository_id}/environments/{environment_name}/variables/{name}"],
         deleteOrgSecret: ["DELETE /orgs/{org}/actions/secrets/{secret_name}"],
+        deleteOrgVariable: ["DELETE /orgs/{org}/actions/variables/{name}"],
         deleteRepoSecret: ["DELETE /repos/{owner}/{repo}/actions/secrets/{secret_name}"],
+        deleteRepoVariable: ["DELETE /repos/{owner}/{repo}/actions/variables/{name}"],
+        deleteRequiredWorkflow: ["DELETE /orgs/{org}/actions/required_workflows/{required_workflow_id}"],
         deleteSelfHostedRunnerFromOrg: ["DELETE /orgs/{org}/actions/runners/{runner_id}"],
         deleteSelfHostedRunnerFromRepo: ["DELETE /repos/{owner}/{repo}/actions/runners/{runner_id}"],
         deleteWorkflowRun: ["DELETE /repos/{owner}/{repo}/actions/runs/{run_id}"],
@@ -6394,14 +6840,13 @@ var require_dist_node10 = __commonJS({
         getActionsCacheList: ["GET /repos/{owner}/{repo}/actions/caches"],
         getActionsCacheUsage: ["GET /repos/{owner}/{repo}/actions/cache/usage"],
         getActionsCacheUsageByRepoForOrg: ["GET /orgs/{org}/actions/cache/usage-by-repository"],
-        getActionsCacheUsageForEnterprise: ["GET /enterprises/{enterprise}/actions/cache/usage"],
         getActionsCacheUsageForOrg: ["GET /orgs/{org}/actions/cache/usage"],
         getAllowedActionsOrganization: ["GET /orgs/{org}/actions/permissions/selected-actions"],
         getAllowedActionsRepository: ["GET /repos/{owner}/{repo}/actions/permissions/selected-actions"],
         getArtifact: ["GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}"],
         getEnvironmentPublicKey: ["GET /repositories/{repository_id}/environments/{environment_name}/secrets/public-key"],
         getEnvironmentSecret: ["GET /repositories/{repository_id}/environments/{environment_name}/secrets/{secret_name}"],
-        getGithubActionsDefaultWorkflowPermissionsEnterprise: ["GET /enterprises/{enterprise}/actions/permissions/workflow"],
+        getEnvironmentVariable: ["GET /repositories/{repository_id}/environments/{environment_name}/variables/{name}"],
         getGithubActionsDefaultWorkflowPermissionsOrganization: ["GET /orgs/{org}/actions/permissions/workflow"],
         getGithubActionsDefaultWorkflowPermissionsRepository: ["GET /repos/{owner}/{repo}/actions/permissions/workflow"],
         getGithubActionsPermissionsOrganization: ["GET /orgs/{org}/actions/permissions"],
@@ -6409,12 +6854,17 @@ var require_dist_node10 = __commonJS({
         getJobForWorkflowRun: ["GET /repos/{owner}/{repo}/actions/jobs/{job_id}"],
         getOrgPublicKey: ["GET /orgs/{org}/actions/secrets/public-key"],
         getOrgSecret: ["GET /orgs/{org}/actions/secrets/{secret_name}"],
+        getOrgVariable: ["GET /orgs/{org}/actions/variables/{name}"],
         getPendingDeploymentsForRun: ["GET /repos/{owner}/{repo}/actions/runs/{run_id}/pending_deployments"],
         getRepoPermissions: ["GET /repos/{owner}/{repo}/actions/permissions", {}, {
           renamed: ["actions", "getGithubActionsPermissionsRepository"]
         }],
         getRepoPublicKey: ["GET /repos/{owner}/{repo}/actions/secrets/public-key"],
+        getRepoRequiredWorkflow: ["GET /repos/{org}/{repo}/actions/required_workflows/{required_workflow_id_for_repo}"],
+        getRepoRequiredWorkflowUsage: ["GET /repos/{org}/{repo}/actions/required_workflows/{required_workflow_id_for_repo}/timing"],
         getRepoSecret: ["GET /repos/{owner}/{repo}/actions/secrets/{secret_name}"],
+        getRepoVariable: ["GET /repos/{owner}/{repo}/actions/variables/{name}"],
+        getRequiredWorkflow: ["GET /orgs/{org}/actions/required_workflows/{required_workflow_id}"],
         getReviewsForRun: ["GET /repos/{owner}/{repo}/actions/runs/{run_id}/approvals"],
         getSelfHostedRunnerForOrg: ["GET /orgs/{org}/actions/runners/{runner_id}"],
         getSelfHostedRunnerForRepo: ["GET /repos/{owner}/{repo}/actions/runners/{runner_id}"],
@@ -6426,17 +6876,27 @@ var require_dist_node10 = __commonJS({
         getWorkflowUsage: ["GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/timing"],
         listArtifactsForRepo: ["GET /repos/{owner}/{repo}/actions/artifacts"],
         listEnvironmentSecrets: ["GET /repositories/{repository_id}/environments/{environment_name}/secrets"],
+        listEnvironmentVariables: ["GET /repositories/{repository_id}/environments/{environment_name}/variables"],
         listJobsForWorkflowRun: ["GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs"],
         listJobsForWorkflowRunAttempt: ["GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs"],
         listLabelsForSelfHostedRunnerForOrg: ["GET /orgs/{org}/actions/runners/{runner_id}/labels"],
         listLabelsForSelfHostedRunnerForRepo: ["GET /repos/{owner}/{repo}/actions/runners/{runner_id}/labels"],
         listOrgSecrets: ["GET /orgs/{org}/actions/secrets"],
+        listOrgVariables: ["GET /orgs/{org}/actions/variables"],
+        listRepoOrganizationSecrets: ["GET /repos/{owner}/{repo}/actions/organization-secrets"],
+        listRepoOrganizationVariables: ["GET /repos/{owner}/{repo}/actions/organization-variables"],
+        listRepoRequiredWorkflows: ["GET /repos/{org}/{repo}/actions/required_workflows"],
         listRepoSecrets: ["GET /repos/{owner}/{repo}/actions/secrets"],
+        listRepoVariables: ["GET /repos/{owner}/{repo}/actions/variables"],
         listRepoWorkflows: ["GET /repos/{owner}/{repo}/actions/workflows"],
+        listRequiredWorkflowRuns: ["GET /repos/{owner}/{repo}/actions/required_workflows/{required_workflow_id_for_repo}/runs"],
+        listRequiredWorkflows: ["GET /orgs/{org}/actions/required_workflows"],
         listRunnerApplicationsForOrg: ["GET /orgs/{org}/actions/runners/downloads"],
         listRunnerApplicationsForRepo: ["GET /repos/{owner}/{repo}/actions/runners/downloads"],
         listSelectedReposForOrgSecret: ["GET /orgs/{org}/actions/secrets/{secret_name}/repositories"],
+        listSelectedReposForOrgVariable: ["GET /orgs/{org}/actions/variables/{name}/repositories"],
         listSelectedRepositoriesEnabledGithubActionsOrganization: ["GET /orgs/{org}/actions/permissions/repositories"],
+        listSelectedRepositoriesRequiredWorkflow: ["GET /orgs/{org}/actions/required_workflows/{required_workflow_id}/repositories"],
         listSelfHostedRunnersForOrg: ["GET /orgs/{org}/actions/runners"],
         listSelfHostedRunnersForRepo: ["GET /repos/{owner}/{repo}/actions/runners"],
         listWorkflowRunArtifacts: ["GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts"],
@@ -6450,19 +6910,27 @@ var require_dist_node10 = __commonJS({
         removeCustomLabelFromSelfHostedRunnerForOrg: ["DELETE /orgs/{org}/actions/runners/{runner_id}/labels/{name}"],
         removeCustomLabelFromSelfHostedRunnerForRepo: ["DELETE /repos/{owner}/{repo}/actions/runners/{runner_id}/labels/{name}"],
         removeSelectedRepoFromOrgSecret: ["DELETE /orgs/{org}/actions/secrets/{secret_name}/repositories/{repository_id}"],
+        removeSelectedRepoFromOrgVariable: ["DELETE /orgs/{org}/actions/variables/{name}/repositories/{repository_id}"],
+        removeSelectedRepoFromRequiredWorkflow: ["DELETE /orgs/{org}/actions/required_workflows/{required_workflow_id}/repositories/{repository_id}"],
+        reviewCustomGatesForRun: ["POST /repos/{owner}/{repo}/actions/runs/{run_id}/deployment_protection_rule"],
         reviewPendingDeploymentsForRun: ["POST /repos/{owner}/{repo}/actions/runs/{run_id}/pending_deployments"],
         setAllowedActionsOrganization: ["PUT /orgs/{org}/actions/permissions/selected-actions"],
         setAllowedActionsRepository: ["PUT /repos/{owner}/{repo}/actions/permissions/selected-actions"],
         setCustomLabelsForSelfHostedRunnerForOrg: ["PUT /orgs/{org}/actions/runners/{runner_id}/labels"],
         setCustomLabelsForSelfHostedRunnerForRepo: ["PUT /repos/{owner}/{repo}/actions/runners/{runner_id}/labels"],
-        setGithubActionsDefaultWorkflowPermissionsEnterprise: ["PUT /enterprises/{enterprise}/actions/permissions/workflow"],
         setGithubActionsDefaultWorkflowPermissionsOrganization: ["PUT /orgs/{org}/actions/permissions/workflow"],
         setGithubActionsDefaultWorkflowPermissionsRepository: ["PUT /repos/{owner}/{repo}/actions/permissions/workflow"],
         setGithubActionsPermissionsOrganization: ["PUT /orgs/{org}/actions/permissions"],
         setGithubActionsPermissionsRepository: ["PUT /repos/{owner}/{repo}/actions/permissions"],
         setSelectedReposForOrgSecret: ["PUT /orgs/{org}/actions/secrets/{secret_name}/repositories"],
+        setSelectedReposForOrgVariable: ["PUT /orgs/{org}/actions/variables/{name}/repositories"],
+        setSelectedReposToRequiredWorkflow: ["PUT /orgs/{org}/actions/required_workflows/{required_workflow_id}/repositories"],
         setSelectedRepositoriesEnabledGithubActionsOrganization: ["PUT /orgs/{org}/actions/permissions/repositories"],
-        setWorkflowAccessToRepository: ["PUT /repos/{owner}/{repo}/actions/permissions/access"]
+        setWorkflowAccessToRepository: ["PUT /repos/{owner}/{repo}/actions/permissions/access"],
+        updateEnvironmentVariable: ["PATCH /repositories/{repository_id}/environments/{environment_name}/variables/{name}"],
+        updateOrgVariable: ["PATCH /orgs/{org}/actions/variables/{name}"],
+        updateRepoVariable: ["PATCH /repos/{owner}/{repo}/actions/variables/{name}"],
+        updateRequiredWorkflow: ["PATCH /orgs/{org}/actions/required_workflows/{required_workflow_id}"]
       },
       activity: {
         checkRepoIsStarredByAuthenticatedUser: ["GET /user/starred/{owner}/{repo}"],
@@ -6521,6 +6989,7 @@ var require_dist_node10 = __commonJS({
         listAccountsForPlan: ["GET /marketplace_listing/plans/{plan_id}/accounts"],
         listAccountsForPlanStubbed: ["GET /marketplace_listing/stubbed/plans/{plan_id}/accounts"],
         listInstallationReposForAuthenticatedUser: ["GET /user/installations/{installation_id}/repositories"],
+        listInstallationRequestsForAuthenticatedApp: ["GET /app/installation-requests"],
         listInstallations: ["GET /app/installations"],
         listInstallationsForAuthenticatedUser: ["GET /user/installations"],
         listPlans: ["GET /marketplace_listing/plans"],
@@ -6544,8 +7013,6 @@ var require_dist_node10 = __commonJS({
       billing: {
         getGithubActionsBillingOrg: ["GET /orgs/{org}/settings/billing/actions"],
         getGithubActionsBillingUser: ["GET /users/{username}/settings/billing/actions"],
-        getGithubAdvancedSecurityBillingGhe: ["GET /enterprises/{enterprise}/settings/billing/advanced-security"],
-        getGithubAdvancedSecurityBillingOrg: ["GET /orgs/{org}/settings/billing/advanced-security"],
         getGithubPackagesBillingOrg: ["GET /orgs/{org}/settings/billing/packages"],
         getGithubPackagesBillingUser: ["GET /users/{username}/settings/billing/packages"],
         getSharedStorageBillingOrg: ["GET /orgs/{org}/settings/billing/shared-storage"],
@@ -6573,16 +7040,19 @@ var require_dist_node10 = __commonJS({
           }
         }],
         getAnalysis: ["GET /repos/{owner}/{repo}/code-scanning/analyses/{analysis_id}"],
+        getCodeqlDatabase: ["GET /repos/{owner}/{repo}/code-scanning/codeql/databases/{language}"],
+        getDefaultSetup: ["GET /repos/{owner}/{repo}/code-scanning/default-setup"],
         getSarif: ["GET /repos/{owner}/{repo}/code-scanning/sarifs/{sarif_id}"],
         listAlertInstances: ["GET /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/instances"],
-        listAlertsForEnterprise: ["GET /enterprises/{enterprise}/code-scanning/alerts"],
         listAlertsForOrg: ["GET /orgs/{org}/code-scanning/alerts"],
         listAlertsForRepo: ["GET /repos/{owner}/{repo}/code-scanning/alerts"],
         listAlertsInstances: ["GET /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/instances", {}, {
           renamed: ["codeScanning", "listAlertInstances"]
         }],
+        listCodeqlDatabases: ["GET /repos/{owner}/{repo}/code-scanning/codeql/databases"],
         listRecentAnalyses: ["GET /repos/{owner}/{repo}/code-scanning/analyses"],
         updateAlert: ["PATCH /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}"],
+        updateDefaultSetup: ["PATCH /repos/{owner}/{repo}/code-scanning/default-setup"],
         uploadSarif: ["POST /repos/{owner}/{repo}/code-scanning/sarifs"]
       },
       codesOfConduct: {
@@ -6591,19 +7061,26 @@ var require_dist_node10 = __commonJS({
       },
       codespaces: {
         addRepositoryForSecretForAuthenticatedUser: ["PUT /user/codespaces/secrets/{secret_name}/repositories/{repository_id}"],
+        addSelectedRepoToOrgSecret: ["PUT /orgs/{org}/codespaces/secrets/{secret_name}/repositories/{repository_id}"],
         codespaceMachinesForAuthenticatedUser: ["GET /user/codespaces/{codespace_name}/machines"],
         createForAuthenticatedUser: ["POST /user/codespaces"],
+        createOrUpdateOrgSecret: ["PUT /orgs/{org}/codespaces/secrets/{secret_name}"],
         createOrUpdateRepoSecret: ["PUT /repos/{owner}/{repo}/codespaces/secrets/{secret_name}"],
         createOrUpdateSecretForAuthenticatedUser: ["PUT /user/codespaces/secrets/{secret_name}"],
         createWithPrForAuthenticatedUser: ["POST /repos/{owner}/{repo}/pulls/{pull_number}/codespaces"],
         createWithRepoForAuthenticatedUser: ["POST /repos/{owner}/{repo}/codespaces"],
+        deleteCodespacesBillingUsers: ["DELETE /orgs/{org}/codespaces/billing/selected_users"],
         deleteForAuthenticatedUser: ["DELETE /user/codespaces/{codespace_name}"],
         deleteFromOrganization: ["DELETE /orgs/{org}/members/{username}/codespaces/{codespace_name}"],
+        deleteOrgSecret: ["DELETE /orgs/{org}/codespaces/secrets/{secret_name}"],
         deleteRepoSecret: ["DELETE /repos/{owner}/{repo}/codespaces/secrets/{secret_name}"],
         deleteSecretForAuthenticatedUser: ["DELETE /user/codespaces/secrets/{secret_name}"],
         exportForAuthenticatedUser: ["POST /user/codespaces/{codespace_name}/exports"],
+        getCodespacesForUserInOrg: ["GET /orgs/{org}/members/{username}/codespaces"],
         getExportDetailsForAuthenticatedUser: ["GET /user/codespaces/{codespace_name}/exports/{export_id}"],
         getForAuthenticatedUser: ["GET /user/codespaces/{codespace_name}"],
+        getOrgPublicKey: ["GET /orgs/{org}/codespaces/secrets/public-key"],
+        getOrgSecret: ["GET /orgs/{org}/codespaces/secrets/{secret_name}"],
         getPublicKeyForAuthenticatedUser: ["GET /user/codespaces/secrets/public-key"],
         getRepoPublicKey: ["GET /repos/{owner}/{repo}/codespaces/secrets/public-key"],
         getRepoSecret: ["GET /repos/{owner}/{repo}/codespaces/secrets/{secret_name}"],
@@ -6616,13 +7093,20 @@ var require_dist_node10 = __commonJS({
           }
         }],
         listInRepositoryForAuthenticatedUser: ["GET /repos/{owner}/{repo}/codespaces"],
+        listOrgSecrets: ["GET /orgs/{org}/codespaces/secrets"],
         listRepoSecrets: ["GET /repos/{owner}/{repo}/codespaces/secrets"],
         listRepositoriesForSecretForAuthenticatedUser: ["GET /user/codespaces/secrets/{secret_name}/repositories"],
         listSecretsForAuthenticatedUser: ["GET /user/codespaces/secrets"],
+        listSelectedReposForOrgSecret: ["GET /orgs/{org}/codespaces/secrets/{secret_name}/repositories"],
         preFlightWithRepoForAuthenticatedUser: ["GET /repos/{owner}/{repo}/codespaces/new"],
+        publishForAuthenticatedUser: ["POST /user/codespaces/{codespace_name}/publish"],
         removeRepositoryForSecretForAuthenticatedUser: ["DELETE /user/codespaces/secrets/{secret_name}/repositories/{repository_id}"],
+        removeSelectedRepoFromOrgSecret: ["DELETE /orgs/{org}/codespaces/secrets/{secret_name}/repositories/{repository_id}"],
         repoMachinesForAuthenticatedUser: ["GET /repos/{owner}/{repo}/codespaces/machines"],
+        setCodespacesBilling: ["PUT /orgs/{org}/codespaces/billing"],
+        setCodespacesBillingUsers: ["POST /orgs/{org}/codespaces/billing/selected_users"],
         setRepositoriesForSecretForAuthenticatedUser: ["PUT /user/codespaces/secrets/{secret_name}/repositories"],
+        setSelectedReposForOrgSecret: ["PUT /orgs/{org}/codespaces/secrets/{secret_name}/repositories"],
         startForAuthenticatedUser: ["POST /user/codespaces/{codespace_name}/start"],
         stopForAuthenticatedUser: ["POST /user/codespaces/{codespace_name}/stop"],
         stopInOrganization: ["POST /orgs/{org}/members/{username}/codespaces/{codespace_name}/stop"],
@@ -6634,38 +7118,28 @@ var require_dist_node10 = __commonJS({
         createOrUpdateRepoSecret: ["PUT /repos/{owner}/{repo}/dependabot/secrets/{secret_name}"],
         deleteOrgSecret: ["DELETE /orgs/{org}/dependabot/secrets/{secret_name}"],
         deleteRepoSecret: ["DELETE /repos/{owner}/{repo}/dependabot/secrets/{secret_name}"],
+        getAlert: ["GET /repos/{owner}/{repo}/dependabot/alerts/{alert_number}"],
         getOrgPublicKey: ["GET /orgs/{org}/dependabot/secrets/public-key"],
         getOrgSecret: ["GET /orgs/{org}/dependabot/secrets/{secret_name}"],
         getRepoPublicKey: ["GET /repos/{owner}/{repo}/dependabot/secrets/public-key"],
         getRepoSecret: ["GET /repos/{owner}/{repo}/dependabot/secrets/{secret_name}"],
+        listAlertsForEnterprise: ["GET /enterprises/{enterprise}/dependabot/alerts"],
+        listAlertsForOrg: ["GET /orgs/{org}/dependabot/alerts"],
+        listAlertsForRepo: ["GET /repos/{owner}/{repo}/dependabot/alerts"],
         listOrgSecrets: ["GET /orgs/{org}/dependabot/secrets"],
         listRepoSecrets: ["GET /repos/{owner}/{repo}/dependabot/secrets"],
         listSelectedReposForOrgSecret: ["GET /orgs/{org}/dependabot/secrets/{secret_name}/repositories"],
         removeSelectedRepoFromOrgSecret: ["DELETE /orgs/{org}/dependabot/secrets/{secret_name}/repositories/{repository_id}"],
-        setSelectedReposForOrgSecret: ["PUT /orgs/{org}/dependabot/secrets/{secret_name}/repositories"]
+        setSelectedReposForOrgSecret: ["PUT /orgs/{org}/dependabot/secrets/{secret_name}/repositories"],
+        updateAlert: ["PATCH /repos/{owner}/{repo}/dependabot/alerts/{alert_number}"]
       },
       dependencyGraph: {
         createRepositorySnapshot: ["POST /repos/{owner}/{repo}/dependency-graph/snapshots"],
-        diffRange: ["GET /repos/{owner}/{repo}/dependency-graph/compare/{basehead}"]
+        diffRange: ["GET /repos/{owner}/{repo}/dependency-graph/compare/{basehead}"],
+        exportSbom: ["GET /repos/{owner}/{repo}/dependency-graph/sbom"]
       },
       emojis: {
         get: ["GET /emojis"]
-      },
-      enterpriseAdmin: {
-        addCustomLabelsToSelfHostedRunnerForEnterprise: ["POST /enterprises/{enterprise}/actions/runners/{runner_id}/labels"],
-        disableSelectedOrganizationGithubActionsEnterprise: ["DELETE /enterprises/{enterprise}/actions/permissions/organizations/{org_id}"],
-        enableSelectedOrganizationGithubActionsEnterprise: ["PUT /enterprises/{enterprise}/actions/permissions/organizations/{org_id}"],
-        getAllowedActionsEnterprise: ["GET /enterprises/{enterprise}/actions/permissions/selected-actions"],
-        getGithubActionsPermissionsEnterprise: ["GET /enterprises/{enterprise}/actions/permissions"],
-        getServerStatistics: ["GET /enterprise-installation/{enterprise_or_org}/server-statistics"],
-        listLabelsForSelfHostedRunnerForEnterprise: ["GET /enterprises/{enterprise}/actions/runners/{runner_id}/labels"],
-        listSelectedOrganizationsEnabledGithubActionsEnterprise: ["GET /enterprises/{enterprise}/actions/permissions/organizations"],
-        removeAllCustomLabelsFromSelfHostedRunnerForEnterprise: ["DELETE /enterprises/{enterprise}/actions/runners/{runner_id}/labels"],
-        removeCustomLabelFromSelfHostedRunnerForEnterprise: ["DELETE /enterprises/{enterprise}/actions/runners/{runner_id}/labels/{name}"],
-        setAllowedActionsEnterprise: ["PUT /enterprises/{enterprise}/actions/permissions/selected-actions"],
-        setCustomLabelsForSelfHostedRunnerForEnterprise: ["PUT /enterprises/{enterprise}/actions/runners/{runner_id}/labels"],
-        setGithubActionsPermissionsEnterprise: ["PUT /enterprises/{enterprise}/actions/permissions"],
-        setSelectedOrganizationsEnabledGithubActionsEnterprise: ["PUT /enterprises/{enterprise}/actions/permissions/organizations"]
       },
       gists: {
         checkIsStarred: ["GET /gists/{gist_id}/star"],
@@ -6732,6 +7206,7 @@ var require_dist_node10 = __commonJS({
         addAssignees: ["POST /repos/{owner}/{repo}/issues/{issue_number}/assignees"],
         addLabels: ["POST /repos/{owner}/{repo}/issues/{issue_number}/labels"],
         checkUserCanBeAssigned: ["GET /repos/{owner}/{repo}/assignees/{assignee}"],
+        checkUserCanBeAssignedToIssue: ["GET /repos/{owner}/{repo}/issues/{issue_number}/assignees/{assignee}"],
         create: ["POST /repos/{owner}/{repo}/issues"],
         createComment: ["POST /repos/{owner}/{repo}/issues/{issue_number}/comments"],
         createLabel: ["POST /repos/{owner}/{repo}/labels"],
@@ -6784,6 +7259,7 @@ var require_dist_node10 = __commonJS({
       },
       meta: {
         get: ["GET /meta"],
+        getAllVersions: ["GET /versions"],
         getOctocat: ["GET /octocat"],
         getZen: ["GET /zen"],
         root: ["GET /"]
@@ -6816,6 +7292,7 @@ var require_dist_node10 = __commonJS({
         updateImport: ["PATCH /repos/{owner}/{repo}/import"]
       },
       orgs: {
+        addSecurityManagerTeam: ["PUT /orgs/{org}/security-managers/teams/{team_slug}"],
         blockUser: ["PUT /orgs/{org}/blocks/{username}"],
         cancelInvitation: ["DELETE /orgs/{org}/invitations/{invitation_id}"],
         checkBlockedUser: ["GET /orgs/{org}/blocks/{username}"],
@@ -6824,7 +7301,9 @@ var require_dist_node10 = __commonJS({
         convertMemberToOutsideCollaborator: ["PUT /orgs/{org}/outside_collaborators/{username}"],
         createInvitation: ["POST /orgs/{org}/invitations"],
         createWebhook: ["POST /orgs/{org}/hooks"],
+        delete: ["DELETE /orgs/{org}"],
         deleteWebhook: ["DELETE /orgs/{org}/hooks/{hook_id}"],
+        enableOrDisableSecurityProductOnAllOrgRepos: ["POST /orgs/{org}/{security_product}/{enablement}"],
         get: ["GET /orgs/{org}"],
         getMembershipForAuthenticatedUser: ["GET /user/memberships/orgs/{org}"],
         getMembershipForUser: ["GET /orgs/{org}/memberships/{username}"],
@@ -6834,7 +7313,6 @@ var require_dist_node10 = __commonJS({
         list: ["GET /organizations"],
         listAppInstallations: ["GET /orgs/{org}/installations"],
         listBlockedUsers: ["GET /orgs/{org}/blocks"],
-        listCustomRoles: ["GET /organizations/{organization_id}/custom_roles"],
         listFailedInvitations: ["GET /orgs/{org}/failed_invitations"],
         listForAuthenticatedUser: ["GET /user/orgs"],
         listForUser: ["GET /users/{username}/orgs"],
@@ -6842,8 +7320,13 @@ var require_dist_node10 = __commonJS({
         listMembers: ["GET /orgs/{org}/members"],
         listMembershipsForAuthenticatedUser: ["GET /user/memberships/orgs"],
         listOutsideCollaborators: ["GET /orgs/{org}/outside_collaborators"],
+        listPatGrantRepositories: ["GET /organizations/{org}/personal-access-tokens/{pat_id}/repositories"],
+        listPatGrantRequestRepositories: ["GET /organizations/{org}/personal-access-token-requests/{pat_request_id}/repositories"],
+        listPatGrantRequests: ["GET /organizations/{org}/personal-access-token-requests"],
+        listPatGrants: ["GET /organizations/{org}/personal-access-tokens"],
         listPendingInvitations: ["GET /orgs/{org}/invitations"],
         listPublicMembers: ["GET /orgs/{org}/public_members"],
+        listSecurityManagerTeams: ["GET /orgs/{org}/security-managers"],
         listWebhookDeliveries: ["GET /orgs/{org}/hooks/{hook_id}/deliveries"],
         listWebhooks: ["GET /orgs/{org}/hooks"],
         pingWebhook: ["POST /orgs/{org}/hooks/{hook_id}/pings"],
@@ -6852,11 +7335,16 @@ var require_dist_node10 = __commonJS({
         removeMembershipForUser: ["DELETE /orgs/{org}/memberships/{username}"],
         removeOutsideCollaborator: ["DELETE /orgs/{org}/outside_collaborators/{username}"],
         removePublicMembershipForAuthenticatedUser: ["DELETE /orgs/{org}/public_members/{username}"],
+        removeSecurityManagerTeam: ["DELETE /orgs/{org}/security-managers/teams/{team_slug}"],
+        reviewPatGrantRequest: ["POST /organizations/{org}/personal-access-token-requests/{pat_request_id}"],
+        reviewPatGrantRequestsInBulk: ["POST /organizations/{org}/personal-access-token-requests"],
         setMembershipForUser: ["PUT /orgs/{org}/memberships/{username}"],
         setPublicMembershipForAuthenticatedUser: ["PUT /orgs/{org}/public_members/{username}"],
         unblockUser: ["DELETE /orgs/{org}/blocks/{username}"],
         update: ["PATCH /orgs/{org}"],
         updateMembershipForAuthenticatedUser: ["PATCH /user/memberships/orgs/{org}"],
+        updatePatAccess: ["POST /organizations/{org}/personal-access-tokens/{pat_id}"],
+        updatePatAccesses: ["POST /organizations/{org}/personal-access-tokens"],
         updateWebhook: ["PATCH /orgs/{org}/hooks/{hook_id}"],
         updateWebhookConfigForOrg: ["PATCH /orgs/{org}/hooks/{hook_id}/config"]
       },
@@ -6882,6 +7370,9 @@ var require_dist_node10 = __commonJS({
         getPackageVersionForAuthenticatedUser: ["GET /user/packages/{package_type}/{package_name}/versions/{package_version_id}"],
         getPackageVersionForOrganization: ["GET /orgs/{org}/packages/{package_type}/{package_name}/versions/{package_version_id}"],
         getPackageVersionForUser: ["GET /users/{username}/packages/{package_type}/{package_name}/versions/{package_version_id}"],
+        listDockerMigrationConflictingPackagesForAuthenticatedUser: ["GET /user/docker/conflicts"],
+        listDockerMigrationConflictingPackagesForOrganization: ["GET /orgs/{org}/docker/conflicts"],
+        listDockerMigrationConflictingPackagesForUser: ["GET /users/{username}/docker/conflicts"],
         listPackagesForAuthenticatedUser: ["GET /user/packages"],
         listPackagesForOrganization: ["GET /orgs/{org}/packages"],
         listPackagesForUser: ["GET /users/{username}/packages"],
@@ -7003,6 +7494,8 @@ var require_dist_node10 = __commonJS({
         createCommitStatus: ["POST /repos/{owner}/{repo}/statuses/{sha}"],
         createDeployKey: ["POST /repos/{owner}/{repo}/keys"],
         createDeployment: ["POST /repos/{owner}/{repo}/deployments"],
+        createDeploymentBranchPolicy: ["POST /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies"],
+        createDeploymentProtectionRule: ["POST /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules"],
         createDeploymentStatus: ["POST /repos/{owner}/{repo}/deployments/{deployment_id}/statuses"],
         createDispatchEvent: ["POST /repos/{owner}/{repo}/dispatches"],
         createForAuthenticatedUser: ["POST /user/repos"],
@@ -7010,8 +7503,11 @@ var require_dist_node10 = __commonJS({
         createInOrg: ["POST /orgs/{org}/repos"],
         createOrUpdateEnvironment: ["PUT /repos/{owner}/{repo}/environments/{environment_name}"],
         createOrUpdateFileContents: ["PUT /repos/{owner}/{repo}/contents/{path}"],
+        createOrgRuleset: ["POST /orgs/{org}/rulesets"],
+        createPagesDeployment: ["POST /repos/{owner}/{repo}/pages/deployment"],
         createPagesSite: ["POST /repos/{owner}/{repo}/pages"],
         createRelease: ["POST /repos/{owner}/{repo}/releases"],
+        createRepoRuleset: ["POST /repos/{owner}/{repo}/rulesets"],
         createTagProtection: ["POST /repos/{owner}/{repo}/tags/protection"],
         createUsingTemplate: ["POST /repos/{template_owner}/{template_repo}/generate"],
         createWebhook: ["POST /repos/{owner}/{repo}/hooks"],
@@ -7029,15 +7525,19 @@ var require_dist_node10 = __commonJS({
         deleteCommitSignatureProtection: ["DELETE /repos/{owner}/{repo}/branches/{branch}/protection/required_signatures"],
         deleteDeployKey: ["DELETE /repos/{owner}/{repo}/keys/{key_id}"],
         deleteDeployment: ["DELETE /repos/{owner}/{repo}/deployments/{deployment_id}"],
+        deleteDeploymentBranchPolicy: ["DELETE /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies/{branch_policy_id}"],
         deleteFile: ["DELETE /repos/{owner}/{repo}/contents/{path}"],
         deleteInvitation: ["DELETE /repos/{owner}/{repo}/invitations/{invitation_id}"],
+        deleteOrgRuleset: ["DELETE /orgs/{org}/rulesets/{ruleset_id}"],
         deletePagesSite: ["DELETE /repos/{owner}/{repo}/pages"],
         deletePullRequestReviewProtection: ["DELETE /repos/{owner}/{repo}/branches/{branch}/protection/required_pull_request_reviews"],
         deleteRelease: ["DELETE /repos/{owner}/{repo}/releases/{release_id}"],
         deleteReleaseAsset: ["DELETE /repos/{owner}/{repo}/releases/assets/{asset_id}"],
+        deleteRepoRuleset: ["DELETE /repos/{owner}/{repo}/rulesets/{ruleset_id}"],
         deleteTagProtection: ["DELETE /repos/{owner}/{repo}/tags/protection/{tag_protection_id}"],
         deleteWebhook: ["DELETE /repos/{owner}/{repo}/hooks/{hook_id}"],
         disableAutomatedSecurityFixes: ["DELETE /repos/{owner}/{repo}/automated-security-fixes"],
+        disableDeploymentProtectionRule: ["DELETE /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/{protection_rule_id}"],
         disableLfsForRepo: ["DELETE /repos/{owner}/{repo}/lfs"],
         disableVulnerabilityAlerts: ["DELETE /repos/{owner}/{repo}/vulnerability-alerts"],
         downloadArchive: ["GET /repos/{owner}/{repo}/zipball/{ref}", {}, {
@@ -7052,6 +7552,7 @@ var require_dist_node10 = __commonJS({
         get: ["GET /repos/{owner}/{repo}"],
         getAccessRestrictions: ["GET /repos/{owner}/{repo}/branches/{branch}/protection/restrictions"],
         getAdminBranchProtection: ["GET /repos/{owner}/{repo}/branches/{branch}/protection/enforce_admins"],
+        getAllDeploymentProtectionRules: ["GET /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules"],
         getAllEnvironments: ["GET /repos/{owner}/{repo}/environments"],
         getAllStatusCheckContexts: ["GET /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks/contexts"],
         getAllTopics: ["GET /repos/{owner}/{repo}/topics"],
@@ -7059,6 +7560,7 @@ var require_dist_node10 = __commonJS({
         getAutolink: ["GET /repos/{owner}/{repo}/autolinks/{autolink_id}"],
         getBranch: ["GET /repos/{owner}/{repo}/branches/{branch}"],
         getBranchProtection: ["GET /repos/{owner}/{repo}/branches/{branch}/protection"],
+        getBranchRules: ["GET /repos/{owner}/{repo}/rules/branches/{branch}"],
         getClones: ["GET /repos/{owner}/{repo}/traffic/clones"],
         getCodeFrequencyStats: ["GET /repos/{owner}/{repo}/stats/code_frequency"],
         getCollaboratorPermissionLevel: ["GET /repos/{owner}/{repo}/collaborators/{username}/permission"],
@@ -7070,12 +7572,16 @@ var require_dist_node10 = __commonJS({
         getCommunityProfileMetrics: ["GET /repos/{owner}/{repo}/community/profile"],
         getContent: ["GET /repos/{owner}/{repo}/contents/{path}"],
         getContributorsStats: ["GET /repos/{owner}/{repo}/stats/contributors"],
+        getCustomDeploymentProtectionRule: ["GET /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/{protection_rule_id}"],
         getDeployKey: ["GET /repos/{owner}/{repo}/keys/{key_id}"],
         getDeployment: ["GET /repos/{owner}/{repo}/deployments/{deployment_id}"],
+        getDeploymentBranchPolicy: ["GET /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies/{branch_policy_id}"],
         getDeploymentStatus: ["GET /repos/{owner}/{repo}/deployments/{deployment_id}/statuses/{status_id}"],
         getEnvironment: ["GET /repos/{owner}/{repo}/environments/{environment_name}"],
         getLatestPagesBuild: ["GET /repos/{owner}/{repo}/pages/builds/latest"],
         getLatestRelease: ["GET /repos/{owner}/{repo}/releases/latest"],
+        getOrgRuleset: ["GET /orgs/{org}/rulesets/{ruleset_id}"],
+        getOrgRulesets: ["GET /orgs/{org}/rulesets"],
         getPages: ["GET /repos/{owner}/{repo}/pages"],
         getPagesBuild: ["GET /repos/{owner}/{repo}/pages/builds/{build_id}"],
         getPagesHealthCheck: ["GET /repos/{owner}/{repo}/pages/health"],
@@ -7087,6 +7593,8 @@ var require_dist_node10 = __commonJS({
         getRelease: ["GET /repos/{owner}/{repo}/releases/{release_id}"],
         getReleaseAsset: ["GET /repos/{owner}/{repo}/releases/assets/{asset_id}"],
         getReleaseByTag: ["GET /repos/{owner}/{repo}/releases/tags/{tag}"],
+        getRepoRuleset: ["GET /repos/{owner}/{repo}/rulesets/{ruleset_id}"],
+        getRepoRulesets: ["GET /repos/{owner}/{repo}/rulesets"],
         getStatusChecksProtection: ["GET /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks"],
         getTeamsWithAccessToProtectedBranch: ["GET /repos/{owner}/{repo}/branches/{branch}/protection/restrictions/teams"],
         getTopPaths: ["GET /repos/{owner}/{repo}/traffic/popular/paths"],
@@ -7105,7 +7613,9 @@ var require_dist_node10 = __commonJS({
         listCommitStatusesForRef: ["GET /repos/{owner}/{repo}/commits/{ref}/statuses"],
         listCommits: ["GET /repos/{owner}/{repo}/commits"],
         listContributors: ["GET /repos/{owner}/{repo}/contributors"],
+        listCustomDeploymentRuleIntegrations: ["GET /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/apps"],
         listDeployKeys: ["GET /repos/{owner}/{repo}/keys"],
+        listDeploymentBranchPolicies: ["GET /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies"],
         listDeploymentStatuses: ["GET /repos/{owner}/{repo}/deployments/{deployment_id}/statuses"],
         listDeployments: ["GET /repos/{owner}/{repo}/deployments"],
         listForAuthenticatedUser: ["GET /user/repos"],
@@ -7164,11 +7674,14 @@ var require_dist_node10 = __commonJS({
         update: ["PATCH /repos/{owner}/{repo}"],
         updateBranchProtection: ["PUT /repos/{owner}/{repo}/branches/{branch}/protection"],
         updateCommitComment: ["PATCH /repos/{owner}/{repo}/comments/{comment_id}"],
+        updateDeploymentBranchPolicy: ["PUT /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies/{branch_policy_id}"],
         updateInformationAboutPagesSite: ["PUT /repos/{owner}/{repo}/pages"],
         updateInvitation: ["PATCH /repos/{owner}/{repo}/invitations/{invitation_id}"],
+        updateOrgRuleset: ["PUT /orgs/{org}/rulesets/{ruleset_id}"],
         updatePullRequestReviewProtection: ["PATCH /repos/{owner}/{repo}/branches/{branch}/protection/required_pull_request_reviews"],
         updateRelease: ["PATCH /repos/{owner}/{repo}/releases/{release_id}"],
         updateReleaseAsset: ["PATCH /repos/{owner}/{repo}/releases/assets/{asset_id}"],
+        updateRepoRuleset: ["PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"],
         updateStatusCheckPotection: ["PATCH /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks", {}, {
           renamed: ["repos", "updateStatusCheckProtection"]
         }],
@@ -7195,6 +7708,13 @@ var require_dist_node10 = __commonJS({
         listAlertsForRepo: ["GET /repos/{owner}/{repo}/secret-scanning/alerts"],
         listLocationsForAlert: ["GET /repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}/locations"],
         updateAlert: ["PATCH /repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}"]
+      },
+      securityAdvisories: {
+        createPrivateVulnerabilityReport: ["POST /repos/{owner}/{repo}/security-advisories/reports"],
+        createRepositoryAdvisory: ["POST /repos/{owner}/{repo}/security-advisories"],
+        getRepositoryAdvisory: ["GET /repos/{owner}/{repo}/security-advisories/{ghsa_id}"],
+        listRepositoryAdvisories: ["GET /repos/{owner}/{repo}/security-advisories"],
+        updateRepositoryAdvisory: ["PATCH /repos/{owner}/{repo}/security-advisories/{ghsa_id}"]
       },
       teams: {
         addOrUpdateMembershipForUserInOrg: ["PUT /orgs/{org}/teams/{team_slug}/memberships/{username}"],
@@ -7233,6 +7753,7 @@ var require_dist_node10 = __commonJS({
           renamed: ["users", "addEmailForAuthenticatedUser"]
         }],
         addEmailForAuthenticatedUser: ["POST /user/emails"],
+        addSocialAccountForAuthenticatedUser: ["POST /user/social_accounts"],
         block: ["PUT /user/blocks/{username}"],
         checkBlocked: ["GET /user/blocks/{username}"],
         checkFollowingForUser: ["GET /users/{username}/following/{target_user}"],
@@ -7245,6 +7766,7 @@ var require_dist_node10 = __commonJS({
           renamed: ["users", "createPublicSshKeyForAuthenticatedUser"]
         }],
         createPublicSshKeyForAuthenticatedUser: ["POST /user/keys"],
+        createSshSigningKeyForAuthenticatedUser: ["POST /user/ssh_signing_keys"],
         deleteEmailForAuthenticated: ["DELETE /user/emails", {}, {
           renamed: ["users", "deleteEmailForAuthenticatedUser"]
         }],
@@ -7257,6 +7779,8 @@ var require_dist_node10 = __commonJS({
           renamed: ["users", "deletePublicSshKeyForAuthenticatedUser"]
         }],
         deletePublicSshKeyForAuthenticatedUser: ["DELETE /user/keys/{key_id}"],
+        deleteSocialAccountForAuthenticatedUser: ["DELETE /user/social_accounts"],
+        deleteSshSigningKeyForAuthenticatedUser: ["DELETE /user/ssh_signing_keys/{ssh_signing_key_id}"],
         follow: ["PUT /user/following/{username}"],
         getAuthenticated: ["GET /user"],
         getByUsername: ["GET /users/{username}"],
@@ -7269,6 +7793,7 @@ var require_dist_node10 = __commonJS({
           renamed: ["users", "getPublicSshKeyForAuthenticatedUser"]
         }],
         getPublicSshKeyForAuthenticatedUser: ["GET /user/keys/{key_id}"],
+        getSshSigningKeyForAuthenticatedUser: ["GET /user/ssh_signing_keys/{ssh_signing_key_id}"],
         list: ["GET /users"],
         listBlockedByAuthenticated: ["GET /user/blocks", {}, {
           renamed: ["users", "listBlockedByAuthenticatedUser"]
@@ -7299,6 +7824,10 @@ var require_dist_node10 = __commonJS({
           renamed: ["users", "listPublicSshKeysForAuthenticatedUser"]
         }],
         listPublicSshKeysForAuthenticatedUser: ["GET /user/keys"],
+        listSocialAccountsForAuthenticatedUser: ["GET /user/social_accounts"],
+        listSocialAccountsForUser: ["GET /users/{username}/social_accounts"],
+        listSshSigningKeysForAuthenticatedUser: ["GET /user/ssh_signing_keys"],
+        listSshSigningKeysForUser: ["GET /users/{username}/ssh_signing_keys"],
         setPrimaryEmailVisibilityForAuthenticated: ["PATCH /user/email/visibility", {}, {
           renamed: ["users", "setPrimaryEmailVisibilityForAuthenticatedUser"]
         }],
@@ -7308,7 +7837,7 @@ var require_dist_node10 = __commonJS({
         updateAuthenticated: ["PATCH /user"]
       }
     };
-    var VERSION = "6.2.0";
+    var VERSION = "7.1.2";
     function endpointsToMethods(octokit, endpointsMap) {
       const newMethods = {};
       for (const [scope, endpoints] of Object.entries(endpointsMap)) {
@@ -8715,7 +9244,8 @@ var require_dist_node11 = __commonJS({
       return ex && typeof ex === "object" && "default" in ex ? ex["default"] : ex;
     }
     var Bottleneck = _interopDefault(require_light());
-    async function errorRequest(octokit, state, error, options) {
+    var requestError = require_dist_node4();
+    async function errorRequest(state, octokit, error, options) {
       if (!error.request || !error.request.request) {
         throw error;
       }
@@ -8726,7 +9256,7 @@ var require_dist_node11 = __commonJS({
       }
       throw error;
     }
-    async function wrapRequest(state, request, options) {
+    async function wrapRequest(state, octokit, request, options) {
       const limiter = new Bottleneck();
       limiter.on("failed", function(error, info) {
         const maxRetries = ~~error.request.request.retries;
@@ -8736,9 +9266,20 @@ var require_dist_node11 = __commonJS({
           return after * state.retryAfterBaseValue;
         }
       });
-      return limiter.schedule(request, options);
+      return limiter.schedule(requestWithGraphqlErrorHandling.bind(null, state, octokit, request), options);
     }
-    var VERSION = "4.0.3";
+    async function requestWithGraphqlErrorHandling(state, octokit, request, options) {
+      const response = await request(request, options);
+      if (response.data && response.data.errors && /Something went wrong while executing your query/.test(response.data.errors[0].message)) {
+        const error = new requestError.RequestError(response.data.errors[0].message, 500, {
+          request: options,
+          response
+        });
+        return errorRequest(state, octokit, error, options);
+      }
+      return response;
+    }
+    var VERSION = "4.1.3";
     function retry(octokit, octokitOptions) {
       const state = Object.assign({
         enabled: true,
@@ -8747,8 +9288,8 @@ var require_dist_node11 = __commonJS({
         retries: 3
       }, octokitOptions.retry);
       if (state.enabled) {
-        octokit.hook.error("request", errorRequest.bind(null, octokit, state));
-        octokit.hook.wrap("request", wrapRequest.bind(null, state));
+        octokit.hook.error("request", errorRequest.bind(null, state, octokit));
+        octokit.hook.wrap("request", wrapRequest.bind(null, state, octokit));
       }
       return {
         retry: {
@@ -8777,7 +9318,7 @@ var require_dist_node12 = __commonJS({
       return ex && typeof ex === "object" && "default" in ex ? ex["default"] : ex;
     }
     var BottleneckLight = _interopDefault(require_light());
-    var VERSION = "4.1.0";
+    var VERSION = "5.2.3";
     var noop = () => Promise.resolve();
     function wrapRequest(state, request, options) {
       return state.retryLimiter.schedule(doRequest, state, request, options);
@@ -8789,7 +9330,7 @@ var require_dist_node12 = __commonJS({
       } = new URL(options.url, "http://github.test");
       const isSearch = options.method === "GET" && pathname.startsWith("/search/");
       const isGraphQL = pathname.startsWith("/graphql");
-      const retryCount = ~~options.request.retryCount;
+      const retryCount = ~~request.retryCount;
       const jobOptions = retryCount > 0 ? {
         priority: 0,
         weight: 0
@@ -8873,20 +9414,29 @@ var require_dist_node12 = __commonJS({
       if (groups.global == null) {
         createGroups(Bottleneck, common);
       }
+      if (octokitOptions.throttle && octokitOptions.throttle.minimalSecondaryRateRetryAfter) {
+        octokit.log.warn("[@octokit/plugin-throttling] `options.throttle.minimalSecondaryRateRetryAfter` is deprecated, please use `options.throttle.fallbackSecondaryRateRetryAfter` instead");
+        octokitOptions.throttle.fallbackSecondaryRateRetryAfter = octokitOptions.throttle.minimalSecondaryRateRetryAfter;
+        delete octokitOptions.throttle.minimalSecondaryRateRetryAfter;
+      }
+      if (octokitOptions.throttle && octokitOptions.throttle.onAbuseLimit) {
+        octokit.log.warn("[@octokit/plugin-throttling] `onAbuseLimit()` is deprecated and will be removed in a future release of `@octokit/plugin-throttling`, please use the `onSecondaryRateLimit` handler instead");
+        octokitOptions.throttle.onSecondaryRateLimit = octokitOptions.throttle.onAbuseLimit;
+        delete octokitOptions.throttle.onAbuseLimit;
+      }
       const state = Object.assign({
         clustering: connection != null,
         triggersNotification,
-        minimumSecondaryRateRetryAfter: 5,
+        fallbackSecondaryRateRetryAfter: 60,
         retryAfterBaseValue: 1e3,
         retryLimiter: new Bottleneck(),
         id,
         ...groups
       }, octokitOptions.throttle);
-      const isUsingDeprecatedOnAbuseLimitHandler = typeof state.onAbuseLimit === "function" && state.onAbuseLimit;
-      if (typeof (isUsingDeprecatedOnAbuseLimitHandler ? state.onAbuseLimit : state.onSecondaryRateLimit) !== "function" || typeof state.onRateLimit !== "function") {
+      if (typeof state.onSecondaryRateLimit !== "function" || typeof state.onRateLimit !== "function") {
         throw new Error(`octokit/plugin-throttling error:
         You must pass the onSecondaryRateLimit and onRateLimit error handlers.
-        See https://github.com/octokit/rest.js#throttling
+        See https://octokit.github.io/rest.js/#throttling
 
         const octokit = new Octokit({
           throttle: {
@@ -8898,14 +9448,11 @@ var require_dist_node12 = __commonJS({
       }
       const events = {};
       const emitter = new Bottleneck.Events(events);
-      events.on("secondary-limit", isUsingDeprecatedOnAbuseLimitHandler ? function(...args) {
-        octokit.log.warn("[@octokit/plugin-throttling] `onAbuseLimit()` is deprecated and will be removed in a future release of `@octokit/plugin-throttling`, please use the `onSecondaryRateLimit` handler instead");
-        return state.onAbuseLimit(...args);
-      } : state.onSecondaryRateLimit);
+      events.on("secondary-limit", state.onSecondaryRateLimit);
       events.on("rate-limit", state.onRateLimit);
       events.on("error", (e) => octokit.log.warn("Error in throttling-plugin limit handler", e));
       state.retryLimiter.on("failed", async function(error, info) {
-        const options = info.args[info.args.length - 1];
+        const [state2, request, options] = info.args;
         const {
           pathname
         } = new URL(options.url, "http://github.test");
@@ -8913,15 +9460,16 @@ var require_dist_node12 = __commonJS({
         if (!(shouldRetryGraphQL || error.status === 403)) {
           return;
         }
-        const retryCount = ~~options.request.retryCount;
+        const retryCount = ~~request.retryCount;
+        request.retryCount = retryCount;
         options.request.retryCount = retryCount;
         const {
           wantRetry,
           retryAfter = 0
         } = await async function() {
           if (/\bsecondary rate\b/i.test(error.message)) {
-            const retryAfter2 = Math.max(~~error.response.headers["retry-after"], state.minimumSecondaryRateRetryAfter);
-            const wantRetry2 = await emitter.trigger("secondary-limit", retryAfter2, options, octokit);
+            const retryAfter2 = Number(error.response.headers["retry-after"]) || state2.fallbackSecondaryRateRetryAfter;
+            const wantRetry2 = await emitter.trigger("secondary-limit", retryAfter2, options, octokit, retryCount);
             return {
               wantRetry: wantRetry2,
               retryAfter: retryAfter2
@@ -8930,7 +9478,7 @@ var require_dist_node12 = __commonJS({
           if (error.response.headers != null && error.response.headers["x-ratelimit-remaining"] === "0") {
             const rateLimitReset = new Date(~~error.response.headers["x-ratelimit-reset"] * 1e3).getTime();
             const retryAfter2 = Math.max(Math.ceil((rateLimitReset - Date.now()) / 1e3), 0);
-            const wantRetry2 = await emitter.trigger("rate-limit", retryAfter2, options, octokit);
+            const wantRetry2 = await emitter.trigger("rate-limit", retryAfter2, options, octokit, retryCount);
             return {
               wantRetry: wantRetry2,
               retryAfter: retryAfter2
@@ -8939,8 +9487,8 @@ var require_dist_node12 = __commonJS({
           return {};
         }();
         if (wantRetry) {
-          options.request.retryCount++;
-          return retryAfter * state.retryAfterBaseValue;
+          request.retryCount++;
+          return retryAfter * state2.retryAfterBaseValue;
         }
       });
       octokit.hook.wrap("request", wrapRequest.bind(null, state));
@@ -9023,7 +9571,7 @@ var require_dist_node14 = __commonJS({
     var request = require_dist_node5();
     var requestError = require_dist_node4();
     var btoa = _interopDefault(require_btoa_node());
-    var VERSION = "2.0.4";
+    var VERSION = "2.0.5";
     function requestToOAuthBaseUrl(request2) {
       const endpointDefaults = request2.endpoint.DEFAULTS;
       return /^https:\/\/(api\.)?github\.com$/.test(endpointDefaults.baseUrl) ? "https://github.com" : endpointDefaults.baseUrl.replace("/api/v3", "");
@@ -9382,7 +9930,7 @@ var require_dist_node15 = __commonJS({
       endpoint.headers.authorization = `token ${token}`;
       return request2(endpoint);
     }
-    var VERSION = "4.0.3";
+    var VERSION = "4.0.4";
     function createOAuthDeviceAuth(options) {
       const requestWithDefaults = options.request || request.request.defaults({
         headers: {
@@ -9430,7 +9978,7 @@ var require_dist_node16 = __commonJS({
     var authOauthDevice = require_dist_node15();
     var oauthMethods = require_dist_node14();
     var btoa = _interopDefault(require_btoa_node());
-    var VERSION = "2.1.0";
+    var VERSION = "2.1.1";
     async function getAuthentication(state) {
       if ("code" in state.strategyOptions) {
         const {
@@ -9487,7 +10035,7 @@ var require_dist_node16 = __commonJS({
       }
       const currentAuthentication = state.authentication;
       if ("expiresAt" in currentAuthentication) {
-        if (options.type === "refresh" || new Date(currentAuthentication.expiresAt) < new Date()) {
+        if (options.type === "refresh" || new Date(currentAuthentication.expiresAt) < /* @__PURE__ */ new Date()) {
           const {
             authentication
           } = await oauthMethods.refreshToken({
@@ -9596,7 +10144,7 @@ var require_dist_node16 = __commonJS({
       endpoint.headers.authorization = "token " + token;
       return request2(endpoint);
     }
-    function createOAuthUserAuth({
+    function createOAuthUserAuth2({
       clientId,
       clientSecret,
       clientType = "oauth-app",
@@ -9621,8 +10169,8 @@ var require_dist_node16 = __commonJS({
         hook: hook.bind(null, state)
       });
     }
-    createOAuthUserAuth.VERSION = VERSION;
-    exports.createOAuthUserAuth = createOAuthUserAuth;
+    createOAuthUserAuth2.VERSION = VERSION;
+    exports.createOAuthUserAuth = createOAuthUserAuth2;
     exports.requiresBasicAuth = requiresBasicAuth;
   }
 });
@@ -9695,7 +10243,7 @@ var require_dist_node17 = __commonJS({
         throw error;
       }
     }
-    var VERSION = "5.0.4";
+    var VERSION = "5.0.5";
     function createOAuthAppAuth(options) {
       const state = Object.assign({
         request: request.request.defaults({
@@ -14055,10 +14603,10 @@ var require_lodash = __commonJS({
         }();
         var ctxClearTimeout = context.clearTimeout !== root.clearTimeout && context.clearTimeout, ctxNow = Date2 && Date2.now !== root.Date.now && Date2.now, ctxSetTimeout = context.setTimeout !== root.setTimeout && context.setTimeout;
         var nativeCeil = Math2.ceil, nativeFloor = Math2.floor, nativeGetSymbols = Object2.getOwnPropertySymbols, nativeIsBuffer = Buffer2 ? Buffer2.isBuffer : undefined2, nativeIsFinite = context.isFinite, nativeJoin = arrayProto.join, nativeKeys = overArg(Object2.keys, Object2), nativeMax = Math2.max, nativeMin = Math2.min, nativeNow = Date2.now, nativeParseInt = context.parseInt, nativeRandom = Math2.random, nativeReverse = arrayProto.reverse;
-        var DataView = getNative(context, "DataView"), Map2 = getNative(context, "Map"), Promise2 = getNative(context, "Promise"), Set2 = getNative(context, "Set"), WeakMap = getNative(context, "WeakMap"), nativeCreate = getNative(Object2, "create");
-        var metaMap = WeakMap && new WeakMap();
+        var DataView = getNative(context, "DataView"), Map2 = getNative(context, "Map"), Promise2 = getNative(context, "Promise"), Set2 = getNative(context, "Set"), WeakMap2 = getNative(context, "WeakMap"), nativeCreate = getNative(Object2, "create");
+        var metaMap = WeakMap2 && new WeakMap2();
         var realNames = {};
-        var dataViewCtorString = toSource(DataView), mapCtorString = toSource(Map2), promiseCtorString = toSource(Promise2), setCtorString = toSource(Set2), weakMapCtorString = toSource(WeakMap);
+        var dataViewCtorString = toSource(DataView), mapCtorString = toSource(Map2), promiseCtorString = toSource(Promise2), setCtorString = toSource(Set2), weakMapCtorString = toSource(WeakMap2);
         var symbolProto = Symbol2 ? Symbol2.prototype : undefined2, symbolValueOf = symbolProto ? symbolProto.valueOf : undefined2, symbolToString = symbolProto ? symbolProto.toString : undefined2;
         function lodash(value) {
           if (isObjectLike(value) && !isArray(value) && !(value instanceof LazyWrapper)) {
@@ -16112,7 +16660,7 @@ var require_lodash = __commonJS({
           return result2;
         };
         var getTag = baseGetTag;
-        if (DataView && getTag(new DataView(new ArrayBuffer(1))) != dataViewTag || Map2 && getTag(new Map2()) != mapTag || Promise2 && getTag(Promise2.resolve()) != promiseTag || Set2 && getTag(new Set2()) != setTag || WeakMap && getTag(new WeakMap()) != weakMapTag) {
+        if (DataView && getTag(new DataView(new ArrayBuffer(1))) != dataViewTag || Map2 && getTag(new Map2()) != mapTag || Promise2 && getTag(Promise2.resolve()) != promiseTag || Set2 && getTag(new Set2()) != setTag || WeakMap2 && getTag(new WeakMap2()) != weakMapTag) {
           getTag = function(value) {
             var result2 = baseGetTag(value), Ctor = result2 == objectTag ? value.constructor : undefined2, ctorString = Ctor ? toSource(Ctor) : "";
             if (ctorString) {
@@ -19096,28 +19644,1282 @@ var require_dist_node18 = __commonJS({
   }
 });
 
-// node_modules/@octokit/auth-app/dist-node/index.js
-var require_dist_node19 = __commonJS({
-  "node_modules/@octokit/auth-app/dist-node/index.js"(exports) {
+// node_modules/@octokit/auth-app/node_modules/lru-cache/dist/cjs/index.js
+var require_cjs = __commonJS({
+  "node_modules/@octokit/auth-app/node_modules/lru-cache/dist/cjs/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    function _interopDefault(ex) {
-      return ex && typeof ex === "object" && "default" in ex ? ex["default"] : ex;
+    exports.LRUCache = void 0;
+    var perf = typeof performance === "object" && performance && typeof performance.now === "function" ? performance : Date;
+    var warned = /* @__PURE__ */ new Set();
+    var PROCESS = typeof process === "object" && !!process ? process : {};
+    var emitWarning = (msg, type, code, fn) => {
+      typeof PROCESS.emitWarning === "function" ? PROCESS.emitWarning(msg, type, code, fn) : console.error(`[${code}] ${type}: ${msg}`);
+    };
+    var AC = globalThis.AbortController;
+    var AS = globalThis.AbortSignal;
+    if (typeof AC === "undefined") {
+      AS = class AbortSignal {
+        onabort;
+        _onabort = [];
+        reason;
+        aborted = false;
+        addEventListener(_, fn) {
+          this._onabort.push(fn);
+        }
+      };
+      AC = class AbortController {
+        constructor() {
+          warnACPolyfill();
+        }
+        signal = new AS();
+        abort(reason) {
+          if (this.signal.aborted)
+            return;
+          this.signal.reason = reason;
+          this.signal.aborted = true;
+          for (const fn of this.signal._onabort) {
+            fn(reason);
+          }
+          this.signal.onabort?.(reason);
+        }
+      };
+      let printACPolyfillWarning = PROCESS.env?.LRU_CACHE_IGNORE_AC_WARNING !== "1";
+      const warnACPolyfill = () => {
+        if (!printACPolyfillWarning)
+          return;
+        printACPolyfillWarning = false;
+        emitWarning("AbortController is not defined. If using lru-cache in node 14, load an AbortController polyfill from the `node-abort-controller` package. A minimal polyfill is provided for use by LRUCache.fetch(), but it should not be relied upon in other contexts (eg, passing it to other APIs that use AbortController/AbortSignal might have undesirable effects). You may disable this with LRU_CACHE_IGNORE_AC_WARNING=1 in the env.", "NO_ABORT_CONTROLLER", "ENOTSUP", warnACPolyfill);
+      };
     }
-    var universalUserAgent = require_dist_node();
-    var request = require_dist_node5();
-    var authOauthApp = require_dist_node17();
-    var deprecation = require_dist_node3();
-    var universalGithubAppJwt = require_dist_node18();
-    var LRU = _interopDefault(require_lru_cache());
-    var authOauthUser = require_dist_node16();
+    var shouldWarn = (code) => !warned.has(code);
+    var TYPE = Symbol("type");
+    var isPosInt = (n) => n && n === Math.floor(n) && n > 0 && isFinite(n);
+    var getUintArray = (max) => !isPosInt(max) ? null : max <= Math.pow(2, 8) ? Uint8Array : max <= Math.pow(2, 16) ? Uint16Array : max <= Math.pow(2, 32) ? Uint32Array : max <= Number.MAX_SAFE_INTEGER ? ZeroArray : null;
+    var ZeroArray = class extends Array {
+      constructor(size) {
+        super(size);
+        this.fill(0);
+      }
+    };
+    var _constructing;
+    var _Stack = class {
+      heap;
+      length;
+      static create(max) {
+        const HeapCls = getUintArray(max);
+        if (!HeapCls)
+          return [];
+        __privateSet(_Stack, _constructing, true);
+        const s = new _Stack(max, HeapCls);
+        __privateSet(_Stack, _constructing, false);
+        return s;
+      }
+      constructor(max, HeapCls) {
+        if (!__privateGet(_Stack, _constructing)) {
+          throw new TypeError("instantiate Stack using Stack.create(n)");
+        }
+        this.heap = new HeapCls(max);
+        this.length = 0;
+      }
+      push(n) {
+        this.heap[this.length++] = n;
+      }
+      pop() {
+        return this.heap[--this.length];
+      }
+    };
+    var Stack = _Stack;
+    _constructing = new WeakMap();
+    // private constructor
+    __privateAdd(Stack, _constructing, false);
+    var LRUCache = class {
+      // properties coming in from the options of these, only max and maxSize
+      // really *need* to be protected. The rest can be modified, as they just
+      // set defaults for various methods.
+      #max;
+      #maxSize;
+      #dispose;
+      #disposeAfter;
+      #fetchMethod;
+      /**
+       * {@link LRUCache.OptionsBase.ttl}
+       */
+      ttl;
+      /**
+       * {@link LRUCache.OptionsBase.ttlResolution}
+       */
+      ttlResolution;
+      /**
+       * {@link LRUCache.OptionsBase.ttlAutopurge}
+       */
+      ttlAutopurge;
+      /**
+       * {@link LRUCache.OptionsBase.updateAgeOnGet}
+       */
+      updateAgeOnGet;
+      /**
+       * {@link LRUCache.OptionsBase.updateAgeOnHas}
+       */
+      updateAgeOnHas;
+      /**
+       * {@link LRUCache.OptionsBase.allowStale}
+       */
+      allowStale;
+      /**
+       * {@link LRUCache.OptionsBase.noDisposeOnSet}
+       */
+      noDisposeOnSet;
+      /**
+       * {@link LRUCache.OptionsBase.noUpdateTTL}
+       */
+      noUpdateTTL;
+      /**
+       * {@link LRUCache.OptionsBase.maxEntrySize}
+       */
+      maxEntrySize;
+      /**
+       * {@link LRUCache.OptionsBase.sizeCalculation}
+       */
+      sizeCalculation;
+      /**
+       * {@link LRUCache.OptionsBase.noDeleteOnFetchRejection}
+       */
+      noDeleteOnFetchRejection;
+      /**
+       * {@link LRUCache.OptionsBase.noDeleteOnStaleGet}
+       */
+      noDeleteOnStaleGet;
+      /**
+       * {@link LRUCache.OptionsBase.allowStaleOnFetchAbort}
+       */
+      allowStaleOnFetchAbort;
+      /**
+       * {@link LRUCache.OptionsBase.allowStaleOnFetchRejection}
+       */
+      allowStaleOnFetchRejection;
+      /**
+       * {@link LRUCache.OptionsBase.ignoreFetchAbort}
+       */
+      ignoreFetchAbort;
+      // computed properties
+      #size;
+      #calculatedSize;
+      #keyMap;
+      #keyList;
+      #valList;
+      #next;
+      #prev;
+      #head;
+      #tail;
+      #free;
+      #disposed;
+      #sizes;
+      #starts;
+      #ttls;
+      #hasDispose;
+      #hasFetchMethod;
+      #hasDisposeAfter;
+      /**
+       * Do not call this method unless you need to inspect the
+       * inner workings of the cache.  If anything returned by this
+       * object is modified in any way, strange breakage may occur.
+       *
+       * These fields are private for a reason!
+       *
+       * @internal
+       */
+      static unsafeExposeInternals(c) {
+        return {
+          // properties
+          starts: c.#starts,
+          ttls: c.#ttls,
+          sizes: c.#sizes,
+          keyMap: c.#keyMap,
+          keyList: c.#keyList,
+          valList: c.#valList,
+          next: c.#next,
+          prev: c.#prev,
+          get head() {
+            return c.#head;
+          },
+          get tail() {
+            return c.#tail;
+          },
+          free: c.#free,
+          // methods
+          isBackgroundFetch: (p) => c.#isBackgroundFetch(p),
+          backgroundFetch: (k, index, options, context) => c.#backgroundFetch(k, index, options, context),
+          moveToTail: (index) => c.#moveToTail(index),
+          indexes: (options) => c.#indexes(options),
+          rindexes: (options) => c.#rindexes(options),
+          isStale: (index) => c.#isStale(index)
+        };
+      }
+      // Protected read-only members
+      /**
+       * {@link LRUCache.OptionsBase.max} (read-only)
+       */
+      get max() {
+        return this.#max;
+      }
+      /**
+       * {@link LRUCache.OptionsBase.maxSize} (read-only)
+       */
+      get maxSize() {
+        return this.#maxSize;
+      }
+      /**
+       * The total computed size of items in the cache (read-only)
+       */
+      get calculatedSize() {
+        return this.#calculatedSize;
+      }
+      /**
+       * The number of items stored in the cache (read-only)
+       */
+      get size() {
+        return this.#size;
+      }
+      /**
+       * {@link LRUCache.OptionsBase.fetchMethod} (read-only)
+       */
+      get fetchMethod() {
+        return this.#fetchMethod;
+      }
+      /**
+       * {@link LRUCache.OptionsBase.dispose} (read-only)
+       */
+      get dispose() {
+        return this.#dispose;
+      }
+      /**
+       * {@link LRUCache.OptionsBase.disposeAfter} (read-only)
+       */
+      get disposeAfter() {
+        return this.#disposeAfter;
+      }
+      constructor(options) {
+        const { max = 0, ttl, ttlResolution = 1, ttlAutopurge, updateAgeOnGet, updateAgeOnHas, allowStale, dispose, disposeAfter, noDisposeOnSet, noUpdateTTL, maxSize = 0, maxEntrySize = 0, sizeCalculation, fetchMethod, noDeleteOnFetchRejection, noDeleteOnStaleGet, allowStaleOnFetchRejection, allowStaleOnFetchAbort, ignoreFetchAbort } = options;
+        if (max !== 0 && !isPosInt(max)) {
+          throw new TypeError("max option must be a nonnegative integer");
+        }
+        const UintArray = max ? getUintArray(max) : Array;
+        if (!UintArray) {
+          throw new Error("invalid max value: " + max);
+        }
+        this.#max = max;
+        this.#maxSize = maxSize;
+        this.maxEntrySize = maxEntrySize || this.#maxSize;
+        this.sizeCalculation = sizeCalculation;
+        if (this.sizeCalculation) {
+          if (!this.#maxSize && !this.maxEntrySize) {
+            throw new TypeError("cannot set sizeCalculation without setting maxSize or maxEntrySize");
+          }
+          if (typeof this.sizeCalculation !== "function") {
+            throw new TypeError("sizeCalculation set to non-function");
+          }
+        }
+        if (fetchMethod !== void 0 && typeof fetchMethod !== "function") {
+          throw new TypeError("fetchMethod must be a function if specified");
+        }
+        this.#fetchMethod = fetchMethod;
+        this.#hasFetchMethod = !!fetchMethod;
+        this.#keyMap = /* @__PURE__ */ new Map();
+        this.#keyList = new Array(max).fill(void 0);
+        this.#valList = new Array(max).fill(void 0);
+        this.#next = new UintArray(max);
+        this.#prev = new UintArray(max);
+        this.#head = 0;
+        this.#tail = 0;
+        this.#free = Stack.create(max);
+        this.#size = 0;
+        this.#calculatedSize = 0;
+        if (typeof dispose === "function") {
+          this.#dispose = dispose;
+        }
+        if (typeof disposeAfter === "function") {
+          this.#disposeAfter = disposeAfter;
+          this.#disposed = [];
+        } else {
+          this.#disposeAfter = void 0;
+          this.#disposed = void 0;
+        }
+        this.#hasDispose = !!this.#dispose;
+        this.#hasDisposeAfter = !!this.#disposeAfter;
+        this.noDisposeOnSet = !!noDisposeOnSet;
+        this.noUpdateTTL = !!noUpdateTTL;
+        this.noDeleteOnFetchRejection = !!noDeleteOnFetchRejection;
+        this.allowStaleOnFetchRejection = !!allowStaleOnFetchRejection;
+        this.allowStaleOnFetchAbort = !!allowStaleOnFetchAbort;
+        this.ignoreFetchAbort = !!ignoreFetchAbort;
+        if (this.maxEntrySize !== 0) {
+          if (this.#maxSize !== 0) {
+            if (!isPosInt(this.#maxSize)) {
+              throw new TypeError("maxSize must be a positive integer if specified");
+            }
+          }
+          if (!isPosInt(this.maxEntrySize)) {
+            throw new TypeError("maxEntrySize must be a positive integer if specified");
+          }
+          this.#initializeSizeTracking();
+        }
+        this.allowStale = !!allowStale;
+        this.noDeleteOnStaleGet = !!noDeleteOnStaleGet;
+        this.updateAgeOnGet = !!updateAgeOnGet;
+        this.updateAgeOnHas = !!updateAgeOnHas;
+        this.ttlResolution = isPosInt(ttlResolution) || ttlResolution === 0 ? ttlResolution : 1;
+        this.ttlAutopurge = !!ttlAutopurge;
+        this.ttl = ttl || 0;
+        if (this.ttl) {
+          if (!isPosInt(this.ttl)) {
+            throw new TypeError("ttl must be a positive integer if specified");
+          }
+          this.#initializeTTLTracking();
+        }
+        if (this.#max === 0 && this.ttl === 0 && this.#maxSize === 0) {
+          throw new TypeError("At least one of max, maxSize, or ttl is required");
+        }
+        if (!this.ttlAutopurge && !this.#max && !this.#maxSize) {
+          const code = "LRU_CACHE_UNBOUNDED";
+          if (shouldWarn(code)) {
+            warned.add(code);
+            const msg = "TTL caching without ttlAutopurge, max, or maxSize can result in unbounded memory consumption.";
+            emitWarning(msg, "UnboundedCacheWarning", code, LRUCache);
+          }
+        }
+      }
+      /**
+       * Return the remaining TTL time for a given entry key
+       */
+      getRemainingTTL(key) {
+        return this.#keyMap.has(key) ? Infinity : 0;
+      }
+      #initializeTTLTracking() {
+        const ttls = new ZeroArray(this.#max);
+        const starts = new ZeroArray(this.#max);
+        this.#ttls = ttls;
+        this.#starts = starts;
+        this.#setItemTTL = (index, ttl, start = perf.now()) => {
+          starts[index] = ttl !== 0 ? start : 0;
+          ttls[index] = ttl;
+          if (ttl !== 0 && this.ttlAutopurge) {
+            const t = setTimeout(() => {
+              if (this.#isStale(index)) {
+                this.delete(this.#keyList[index]);
+              }
+            }, ttl + 1);
+            if (t.unref) {
+              t.unref();
+            }
+          }
+        };
+        this.#updateItemAge = (index) => {
+          starts[index] = ttls[index] !== 0 ? perf.now() : 0;
+        };
+        this.#statusTTL = (status, index) => {
+          if (ttls[index]) {
+            const ttl = ttls[index];
+            const start = starts[index];
+            status.ttl = ttl;
+            status.start = start;
+            status.now = cachedNow || getNow();
+            const age = status.now - start;
+            status.remainingTTL = ttl - age;
+          }
+        };
+        let cachedNow = 0;
+        const getNow = () => {
+          const n = perf.now();
+          if (this.ttlResolution > 0) {
+            cachedNow = n;
+            const t = setTimeout(() => cachedNow = 0, this.ttlResolution);
+            if (t.unref) {
+              t.unref();
+            }
+          }
+          return n;
+        };
+        this.getRemainingTTL = (key) => {
+          const index = this.#keyMap.get(key);
+          if (index === void 0) {
+            return 0;
+          }
+          const ttl = ttls[index];
+          const start = starts[index];
+          if (ttl === 0 || start === 0) {
+            return Infinity;
+          }
+          const age = (cachedNow || getNow()) - start;
+          return ttl - age;
+        };
+        this.#isStale = (index) => {
+          return ttls[index] !== 0 && starts[index] !== 0 && (cachedNow || getNow()) - starts[index] > ttls[index];
+        };
+      }
+      // conditionally set private methods related to TTL
+      #updateItemAge = () => {
+      };
+      #statusTTL = () => {
+      };
+      #setItemTTL = () => {
+      };
+      /* c8 ignore stop */
+      #isStale = () => false;
+      #initializeSizeTracking() {
+        const sizes = new ZeroArray(this.#max);
+        this.#calculatedSize = 0;
+        this.#sizes = sizes;
+        this.#removeItemSize = (index) => {
+          this.#calculatedSize -= sizes[index];
+          sizes[index] = 0;
+        };
+        this.#requireSize = (k, v, size, sizeCalculation) => {
+          if (this.#isBackgroundFetch(v)) {
+            return 0;
+          }
+          if (!isPosInt(size)) {
+            if (sizeCalculation) {
+              if (typeof sizeCalculation !== "function") {
+                throw new TypeError("sizeCalculation must be a function");
+              }
+              size = sizeCalculation(v, k);
+              if (!isPosInt(size)) {
+                throw new TypeError("sizeCalculation return invalid (expect positive integer)");
+              }
+            } else {
+              throw new TypeError("invalid size value (must be positive integer). When maxSize or maxEntrySize is used, sizeCalculation or size must be set.");
+            }
+          }
+          return size;
+        };
+        this.#addItemSize = (index, size, status) => {
+          sizes[index] = size;
+          if (this.#maxSize) {
+            const maxSize = this.#maxSize - sizes[index];
+            while (this.#calculatedSize > maxSize) {
+              this.#evict(true);
+            }
+          }
+          this.#calculatedSize += sizes[index];
+          if (status) {
+            status.entrySize = size;
+            status.totalCalculatedSize = this.#calculatedSize;
+          }
+        };
+      }
+      #removeItemSize = (_i) => {
+      };
+      #addItemSize = (_i, _s, _st) => {
+      };
+      #requireSize = (_k, _v, size, sizeCalculation) => {
+        if (size || sizeCalculation) {
+          throw new TypeError("cannot set size without setting maxSize or maxEntrySize on cache");
+        }
+        return 0;
+      };
+      *#indexes({ allowStale = this.allowStale } = {}) {
+        if (this.#size) {
+          for (let i = this.#tail; true; ) {
+            if (!this.#isValidIndex(i)) {
+              break;
+            }
+            if (allowStale || !this.#isStale(i)) {
+              yield i;
+            }
+            if (i === this.#head) {
+              break;
+            } else {
+              i = this.#prev[i];
+            }
+          }
+        }
+      }
+      *#rindexes({ allowStale = this.allowStale } = {}) {
+        if (this.#size) {
+          for (let i = this.#head; true; ) {
+            if (!this.#isValidIndex(i)) {
+              break;
+            }
+            if (allowStale || !this.#isStale(i)) {
+              yield i;
+            }
+            if (i === this.#tail) {
+              break;
+            } else {
+              i = this.#next[i];
+            }
+          }
+        }
+      }
+      #isValidIndex(index) {
+        return index !== void 0 && this.#keyMap.get(this.#keyList[index]) === index;
+      }
+      /**
+       * Return a generator yielding `[key, value]` pairs,
+       * in order from most recently used to least recently used.
+       */
+      *entries() {
+        for (const i of this.#indexes()) {
+          if (this.#valList[i] !== void 0 && this.#keyList[i] !== void 0 && !this.#isBackgroundFetch(this.#valList[i])) {
+            yield [this.#keyList[i], this.#valList[i]];
+          }
+        }
+      }
+      /**
+       * Inverse order version of {@link LRUCache.entries}
+       *
+       * Return a generator yielding `[key, value]` pairs,
+       * in order from least recently used to most recently used.
+       */
+      *rentries() {
+        for (const i of this.#rindexes()) {
+          if (this.#valList[i] !== void 0 && this.#keyList[i] !== void 0 && !this.#isBackgroundFetch(this.#valList[i])) {
+            yield [this.#keyList[i], this.#valList[i]];
+          }
+        }
+      }
+      /**
+       * Return a generator yielding the keys in the cache,
+       * in order from most recently used to least recently used.
+       */
+      *keys() {
+        for (const i of this.#indexes()) {
+          const k = this.#keyList[i];
+          if (k !== void 0 && !this.#isBackgroundFetch(this.#valList[i])) {
+            yield k;
+          }
+        }
+      }
+      /**
+       * Inverse order version of {@link LRUCache.keys}
+       *
+       * Return a generator yielding the keys in the cache,
+       * in order from least recently used to most recently used.
+       */
+      *rkeys() {
+        for (const i of this.#rindexes()) {
+          const k = this.#keyList[i];
+          if (k !== void 0 && !this.#isBackgroundFetch(this.#valList[i])) {
+            yield k;
+          }
+        }
+      }
+      /**
+       * Return a generator yielding the values in the cache,
+       * in order from most recently used to least recently used.
+       */
+      *values() {
+        for (const i of this.#indexes()) {
+          const v = this.#valList[i];
+          if (v !== void 0 && !this.#isBackgroundFetch(this.#valList[i])) {
+            yield this.#valList[i];
+          }
+        }
+      }
+      /**
+       * Inverse order version of {@link LRUCache.values}
+       *
+       * Return a generator yielding the values in the cache,
+       * in order from least recently used to most recently used.
+       */
+      *rvalues() {
+        for (const i of this.#rindexes()) {
+          const v = this.#valList[i];
+          if (v !== void 0 && !this.#isBackgroundFetch(this.#valList[i])) {
+            yield this.#valList[i];
+          }
+        }
+      }
+      /**
+       * Iterating over the cache itself yields the same results as
+       * {@link LRUCache.entries}
+       */
+      [Symbol.iterator]() {
+        return this.entries();
+      }
+      /**
+       * Find a value for which the supplied fn method returns a truthy value,
+       * similar to Array.find().  fn is called as fn(value, key, cache).
+       */
+      find(fn, getOptions = {}) {
+        for (const i of this.#indexes()) {
+          const v = this.#valList[i];
+          const value = this.#isBackgroundFetch(v) ? v.__staleWhileFetching : v;
+          if (value === void 0)
+            continue;
+          if (fn(value, this.#keyList[i], this)) {
+            return this.get(this.#keyList[i], getOptions);
+          }
+        }
+      }
+      /**
+       * Call the supplied function on each item in the cache, in order from
+       * most recently used to least recently used.  fn is called as
+       * fn(value, key, cache).  Does not update age or recenty of use.
+       * Does not iterate over stale values.
+       */
+      forEach(fn, thisp = this) {
+        for (const i of this.#indexes()) {
+          const v = this.#valList[i];
+          const value = this.#isBackgroundFetch(v) ? v.__staleWhileFetching : v;
+          if (value === void 0)
+            continue;
+          fn.call(thisp, value, this.#keyList[i], this);
+        }
+      }
+      /**
+       * The same as {@link LRUCache.forEach} but items are iterated over in
+       * reverse order.  (ie, less recently used items are iterated over first.)
+       */
+      rforEach(fn, thisp = this) {
+        for (const i of this.#rindexes()) {
+          const v = this.#valList[i];
+          const value = this.#isBackgroundFetch(v) ? v.__staleWhileFetching : v;
+          if (value === void 0)
+            continue;
+          fn.call(thisp, value, this.#keyList[i], this);
+        }
+      }
+      /**
+       * Delete any stale entries. Returns true if anything was removed,
+       * false otherwise.
+       */
+      purgeStale() {
+        let deleted = false;
+        for (const i of this.#rindexes({ allowStale: true })) {
+          if (this.#isStale(i)) {
+            this.delete(this.#keyList[i]);
+            deleted = true;
+          }
+        }
+        return deleted;
+      }
+      /**
+       * Return an array of [key, {@link LRUCache.Entry}] tuples which can be
+       * passed to cache.load()
+       */
+      dump() {
+        const arr = [];
+        for (const i of this.#indexes({ allowStale: true })) {
+          const key = this.#keyList[i];
+          const v = this.#valList[i];
+          const value = this.#isBackgroundFetch(v) ? v.__staleWhileFetching : v;
+          if (value === void 0 || key === void 0)
+            continue;
+          const entry = { value };
+          if (this.#ttls && this.#starts) {
+            entry.ttl = this.#ttls[i];
+            const age = perf.now() - this.#starts[i];
+            entry.start = Math.floor(Date.now() - age);
+          }
+          if (this.#sizes) {
+            entry.size = this.#sizes[i];
+          }
+          arr.unshift([key, entry]);
+        }
+        return arr;
+      }
+      /**
+       * Reset the cache and load in the items in entries in the order listed.
+       * Note that the shape of the resulting cache may be different if the
+       * same options are not used in both caches.
+       */
+      load(arr) {
+        this.clear();
+        for (const [key, entry] of arr) {
+          if (entry.start) {
+            const age = Date.now() - entry.start;
+            entry.start = perf.now() - age;
+          }
+          this.set(key, entry.value, entry);
+        }
+      }
+      /**
+       * Add a value to the cache.
+       *
+       * Note: if `undefined` is specified as a value, this is an alias for
+       * {@link LRUCache#delete}
+       */
+      set(k, v, setOptions = {}) {
+        if (v === void 0) {
+          this.delete(k);
+          return this;
+        }
+        const { ttl = this.ttl, start, noDisposeOnSet = this.noDisposeOnSet, sizeCalculation = this.sizeCalculation, status } = setOptions;
+        let { noUpdateTTL = this.noUpdateTTL } = setOptions;
+        const size = this.#requireSize(k, v, setOptions.size || 0, sizeCalculation);
+        if (this.maxEntrySize && size > this.maxEntrySize) {
+          if (status) {
+            status.set = "miss";
+            status.maxEntrySizeExceeded = true;
+          }
+          this.delete(k);
+          return this;
+        }
+        let index = this.#size === 0 ? void 0 : this.#keyMap.get(k);
+        if (index === void 0) {
+          index = this.#size === 0 ? this.#tail : this.#free.length !== 0 ? this.#free.pop() : this.#size === this.#max ? this.#evict(false) : this.#size;
+          this.#keyList[index] = k;
+          this.#valList[index] = v;
+          this.#keyMap.set(k, index);
+          this.#next[this.#tail] = index;
+          this.#prev[index] = this.#tail;
+          this.#tail = index;
+          this.#size++;
+          this.#addItemSize(index, size, status);
+          if (status)
+            status.set = "add";
+          noUpdateTTL = false;
+        } else {
+          this.#moveToTail(index);
+          const oldVal = this.#valList[index];
+          if (v !== oldVal) {
+            if (this.#hasFetchMethod && this.#isBackgroundFetch(oldVal)) {
+              oldVal.__abortController.abort(new Error("replaced"));
+            } else if (!noDisposeOnSet) {
+              if (this.#hasDispose) {
+                this.#dispose?.(oldVal, k, "set");
+              }
+              if (this.#hasDisposeAfter) {
+                this.#disposed?.push([oldVal, k, "set"]);
+              }
+            }
+            this.#removeItemSize(index);
+            this.#addItemSize(index, size, status);
+            this.#valList[index] = v;
+            if (status) {
+              status.set = "replace";
+              const oldValue = oldVal && this.#isBackgroundFetch(oldVal) ? oldVal.__staleWhileFetching : oldVal;
+              if (oldValue !== void 0)
+                status.oldValue = oldValue;
+            }
+          } else if (status) {
+            status.set = "update";
+          }
+        }
+        if (ttl !== 0 && !this.#ttls) {
+          this.#initializeTTLTracking();
+        }
+        if (this.#ttls) {
+          if (!noUpdateTTL) {
+            this.#setItemTTL(index, ttl, start);
+          }
+          if (status)
+            this.#statusTTL(status, index);
+        }
+        if (!noDisposeOnSet && this.#hasDisposeAfter && this.#disposed) {
+          const dt = this.#disposed;
+          let task;
+          while (task = dt?.shift()) {
+            this.#disposeAfter?.(...task);
+          }
+        }
+        return this;
+      }
+      /**
+       * Evict the least recently used item, returning its value or
+       * `undefined` if cache is empty.
+       */
+      pop() {
+        try {
+          while (this.#size) {
+            const val = this.#valList[this.#head];
+            this.#evict(true);
+            if (this.#isBackgroundFetch(val)) {
+              if (val.__staleWhileFetching) {
+                return val.__staleWhileFetching;
+              }
+            } else if (val !== void 0) {
+              return val;
+            }
+          }
+        } finally {
+          if (this.#hasDisposeAfter && this.#disposed) {
+            const dt = this.#disposed;
+            let task;
+            while (task = dt?.shift()) {
+              this.#disposeAfter?.(...task);
+            }
+          }
+        }
+      }
+      #evict(free) {
+        const head = this.#head;
+        const k = this.#keyList[head];
+        const v = this.#valList[head];
+        if (this.#hasFetchMethod && this.#isBackgroundFetch(v)) {
+          v.__abortController.abort(new Error("evicted"));
+        } else if (this.#hasDispose || this.#hasDisposeAfter) {
+          if (this.#hasDispose) {
+            this.#dispose?.(v, k, "evict");
+          }
+          if (this.#hasDisposeAfter) {
+            this.#disposed?.push([v, k, "evict"]);
+          }
+        }
+        this.#removeItemSize(head);
+        if (free) {
+          this.#keyList[head] = void 0;
+          this.#valList[head] = void 0;
+          this.#free.push(head);
+        }
+        if (this.#size === 1) {
+          this.#head = this.#tail = 0;
+          this.#free.length = 0;
+        } else {
+          this.#head = this.#next[head];
+        }
+        this.#keyMap.delete(k);
+        this.#size--;
+        return head;
+      }
+      /**
+       * Check if a key is in the cache, without updating the recency of use.
+       * Will return false if the item is stale, even though it is technically
+       * in the cache.
+       *
+       * Will not update item age unless
+       * {@link LRUCache.OptionsBase.updateAgeOnHas} is set.
+       */
+      has(k, hasOptions = {}) {
+        const { updateAgeOnHas = this.updateAgeOnHas, status } = hasOptions;
+        const index = this.#keyMap.get(k);
+        if (index !== void 0) {
+          const v = this.#valList[index];
+          if (this.#isBackgroundFetch(v) && v.__staleWhileFetching === void 0) {
+            return false;
+          }
+          if (!this.#isStale(index)) {
+            if (updateAgeOnHas) {
+              this.#updateItemAge(index);
+            }
+            if (status) {
+              status.has = "hit";
+              this.#statusTTL(status, index);
+            }
+            return true;
+          } else if (status) {
+            status.has = "stale";
+            this.#statusTTL(status, index);
+          }
+        } else if (status) {
+          status.has = "miss";
+        }
+        return false;
+      }
+      /**
+       * Like {@link LRUCache#get} but doesn't update recency or delete stale
+       * items.
+       *
+       * Returns `undefined` if the item is stale, unless
+       * {@link LRUCache.OptionsBase.allowStale} is set.
+       */
+      peek(k, peekOptions = {}) {
+        const { allowStale = this.allowStale } = peekOptions;
+        const index = this.#keyMap.get(k);
+        if (index !== void 0 && (allowStale || !this.#isStale(index))) {
+          const v = this.#valList[index];
+          return this.#isBackgroundFetch(v) ? v.__staleWhileFetching : v;
+        }
+      }
+      #backgroundFetch(k, index, options, context) {
+        const v = index === void 0 ? void 0 : this.#valList[index];
+        if (this.#isBackgroundFetch(v)) {
+          return v;
+        }
+        const ac = new AC();
+        const { signal } = options;
+        signal?.addEventListener("abort", () => ac.abort(signal.reason), {
+          signal: ac.signal
+        });
+        const fetchOpts = {
+          signal: ac.signal,
+          options,
+          context
+        };
+        const cb = (v2, updateCache = false) => {
+          const { aborted } = ac.signal;
+          const ignoreAbort = options.ignoreFetchAbort && v2 !== void 0;
+          if (options.status) {
+            if (aborted && !updateCache) {
+              options.status.fetchAborted = true;
+              options.status.fetchError = ac.signal.reason;
+              if (ignoreAbort)
+                options.status.fetchAbortIgnored = true;
+            } else {
+              options.status.fetchResolved = true;
+            }
+          }
+          if (aborted && !ignoreAbort && !updateCache) {
+            return fetchFail(ac.signal.reason);
+          }
+          const bf2 = p;
+          if (this.#valList[index] === p) {
+            if (v2 === void 0) {
+              if (bf2.__staleWhileFetching) {
+                this.#valList[index] = bf2.__staleWhileFetching;
+              } else {
+                this.delete(k);
+              }
+            } else {
+              if (options.status)
+                options.status.fetchUpdated = true;
+              this.set(k, v2, fetchOpts.options);
+            }
+          }
+          return v2;
+        };
+        const eb = (er) => {
+          if (options.status) {
+            options.status.fetchRejected = true;
+            options.status.fetchError = er;
+          }
+          return fetchFail(er);
+        };
+        const fetchFail = (er) => {
+          const { aborted } = ac.signal;
+          const allowStaleAborted = aborted && options.allowStaleOnFetchAbort;
+          const allowStale = allowStaleAborted || options.allowStaleOnFetchRejection;
+          const noDelete = allowStale || options.noDeleteOnFetchRejection;
+          const bf2 = p;
+          if (this.#valList[index] === p) {
+            const del = !noDelete || bf2.__staleWhileFetching === void 0;
+            if (del) {
+              this.delete(k);
+            } else if (!allowStaleAborted) {
+              this.#valList[index] = bf2.__staleWhileFetching;
+            }
+          }
+          if (allowStale) {
+            if (options.status && bf2.__staleWhileFetching !== void 0) {
+              options.status.returnedStale = true;
+            }
+            return bf2.__staleWhileFetching;
+          } else if (bf2.__returned === bf2) {
+            throw er;
+          }
+        };
+        const pcall = (res, rej) => {
+          const fmp = this.#fetchMethod?.(k, v, fetchOpts);
+          if (fmp && fmp instanceof Promise) {
+            fmp.then((v2) => res(v2), rej);
+          }
+          ac.signal.addEventListener("abort", () => {
+            if (!options.ignoreFetchAbort || options.allowStaleOnFetchAbort) {
+              res();
+              if (options.allowStaleOnFetchAbort) {
+                res = (v2) => cb(v2, true);
+              }
+            }
+          });
+        };
+        if (options.status)
+          options.status.fetchDispatched = true;
+        const p = new Promise(pcall).then(cb, eb);
+        const bf = Object.assign(p, {
+          __abortController: ac,
+          __staleWhileFetching: v,
+          __returned: void 0
+        });
+        if (index === void 0) {
+          this.set(k, bf, { ...fetchOpts.options, status: void 0 });
+          index = this.#keyMap.get(k);
+        } else {
+          this.#valList[index] = bf;
+        }
+        return bf;
+      }
+      #isBackgroundFetch(p) {
+        if (!this.#hasFetchMethod)
+          return false;
+        const b = p;
+        return !!b && b instanceof Promise && b.hasOwnProperty("__staleWhileFetching") && b.__abortController instanceof AC;
+      }
+      async fetch(k, fetchOptions = {}) {
+        const {
+          // get options
+          allowStale = this.allowStale,
+          updateAgeOnGet = this.updateAgeOnGet,
+          noDeleteOnStaleGet = this.noDeleteOnStaleGet,
+          // set options
+          ttl = this.ttl,
+          noDisposeOnSet = this.noDisposeOnSet,
+          size = 0,
+          sizeCalculation = this.sizeCalculation,
+          noUpdateTTL = this.noUpdateTTL,
+          // fetch exclusive options
+          noDeleteOnFetchRejection = this.noDeleteOnFetchRejection,
+          allowStaleOnFetchRejection = this.allowStaleOnFetchRejection,
+          ignoreFetchAbort = this.ignoreFetchAbort,
+          allowStaleOnFetchAbort = this.allowStaleOnFetchAbort,
+          context,
+          forceRefresh = false,
+          status,
+          signal
+        } = fetchOptions;
+        if (!this.#hasFetchMethod) {
+          if (status)
+            status.fetch = "get";
+          return this.get(k, {
+            allowStale,
+            updateAgeOnGet,
+            noDeleteOnStaleGet,
+            status
+          });
+        }
+        const options = {
+          allowStale,
+          updateAgeOnGet,
+          noDeleteOnStaleGet,
+          ttl,
+          noDisposeOnSet,
+          size,
+          sizeCalculation,
+          noUpdateTTL,
+          noDeleteOnFetchRejection,
+          allowStaleOnFetchRejection,
+          allowStaleOnFetchAbort,
+          ignoreFetchAbort,
+          status,
+          signal
+        };
+        let index = this.#keyMap.get(k);
+        if (index === void 0) {
+          if (status)
+            status.fetch = "miss";
+          const p = this.#backgroundFetch(k, index, options, context);
+          return p.__returned = p;
+        } else {
+          const v = this.#valList[index];
+          if (this.#isBackgroundFetch(v)) {
+            const stale = allowStale && v.__staleWhileFetching !== void 0;
+            if (status) {
+              status.fetch = "inflight";
+              if (stale)
+                status.returnedStale = true;
+            }
+            return stale ? v.__staleWhileFetching : v.__returned = v;
+          }
+          const isStale = this.#isStale(index);
+          if (!forceRefresh && !isStale) {
+            if (status)
+              status.fetch = "hit";
+            this.#moveToTail(index);
+            if (updateAgeOnGet) {
+              this.#updateItemAge(index);
+            }
+            if (status)
+              this.#statusTTL(status, index);
+            return v;
+          }
+          const p = this.#backgroundFetch(k, index, options, context);
+          const hasStale = p.__staleWhileFetching !== void 0;
+          const staleVal = hasStale && allowStale;
+          if (status) {
+            status.fetch = isStale ? "stale" : "refresh";
+            if (staleVal && isStale)
+              status.returnedStale = true;
+          }
+          return staleVal ? p.__staleWhileFetching : p.__returned = p;
+        }
+      }
+      /**
+       * Return a value from the cache. Will update the recency of the cache
+       * entry found.
+       *
+       * If the key is not found, get() will return `undefined`.
+       */
+      get(k, getOptions = {}) {
+        const { allowStale = this.allowStale, updateAgeOnGet = this.updateAgeOnGet, noDeleteOnStaleGet = this.noDeleteOnStaleGet, status } = getOptions;
+        const index = this.#keyMap.get(k);
+        if (index !== void 0) {
+          const value = this.#valList[index];
+          const fetching = this.#isBackgroundFetch(value);
+          if (status)
+            this.#statusTTL(status, index);
+          if (this.#isStale(index)) {
+            if (status)
+              status.get = "stale";
+            if (!fetching) {
+              if (!noDeleteOnStaleGet) {
+                this.delete(k);
+              }
+              if (status && allowStale)
+                status.returnedStale = true;
+              return allowStale ? value : void 0;
+            } else {
+              if (status && allowStale && value.__staleWhileFetching !== void 0) {
+                status.returnedStale = true;
+              }
+              return allowStale ? value.__staleWhileFetching : void 0;
+            }
+          } else {
+            if (status)
+              status.get = "hit";
+            if (fetching) {
+              return value.__staleWhileFetching;
+            }
+            this.#moveToTail(index);
+            if (updateAgeOnGet) {
+              this.#updateItemAge(index);
+            }
+            return value;
+          }
+        } else if (status) {
+          status.get = "miss";
+        }
+      }
+      #connect(p, n) {
+        this.#prev[n] = p;
+        this.#next[p] = n;
+      }
+      #moveToTail(index) {
+        if (index !== this.#tail) {
+          if (index === this.#head) {
+            this.#head = this.#next[index];
+          } else {
+            this.#connect(this.#prev[index], this.#next[index]);
+          }
+          this.#connect(this.#tail, index);
+          this.#tail = index;
+        }
+      }
+      /**
+       * Deletes a key out of the cache.
+       * Returns true if the key was deleted, false otherwise.
+       */
+      delete(k) {
+        let deleted = false;
+        if (this.#size !== 0) {
+          const index = this.#keyMap.get(k);
+          if (index !== void 0) {
+            deleted = true;
+            if (this.#size === 1) {
+              this.clear();
+            } else {
+              this.#removeItemSize(index);
+              const v = this.#valList[index];
+              if (this.#isBackgroundFetch(v)) {
+                v.__abortController.abort(new Error("deleted"));
+              } else if (this.#hasDispose || this.#hasDisposeAfter) {
+                if (this.#hasDispose) {
+                  this.#dispose?.(v, k, "delete");
+                }
+                if (this.#hasDisposeAfter) {
+                  this.#disposed?.push([v, k, "delete"]);
+                }
+              }
+              this.#keyMap.delete(k);
+              this.#keyList[index] = void 0;
+              this.#valList[index] = void 0;
+              if (index === this.#tail) {
+                this.#tail = this.#prev[index];
+              } else if (index === this.#head) {
+                this.#head = this.#next[index];
+              } else {
+                this.#next[this.#prev[index]] = this.#next[index];
+                this.#prev[this.#next[index]] = this.#prev[index];
+              }
+              this.#size--;
+              this.#free.push(index);
+            }
+          }
+        }
+        if (this.#hasDisposeAfter && this.#disposed?.length) {
+          const dt = this.#disposed;
+          let task;
+          while (task = dt?.shift()) {
+            this.#disposeAfter?.(...task);
+          }
+        }
+        return deleted;
+      }
+      /**
+       * Clear the cache entirely, throwing away all values.
+       */
+      clear() {
+        for (const index of this.#rindexes({ allowStale: true })) {
+          const v = this.#valList[index];
+          if (this.#isBackgroundFetch(v)) {
+            v.__abortController.abort(new Error("deleted"));
+          } else {
+            const k = this.#keyList[index];
+            if (this.#hasDispose) {
+              this.#dispose?.(v, k, "delete");
+            }
+            if (this.#hasDisposeAfter) {
+              this.#disposed?.push([v, k, "delete"]);
+            }
+          }
+        }
+        this.#keyMap.clear();
+        this.#valList.fill(void 0);
+        this.#keyList.fill(void 0);
+        if (this.#ttls && this.#starts) {
+          this.#ttls.fill(0);
+          this.#starts.fill(0);
+        }
+        if (this.#sizes) {
+          this.#sizes.fill(0);
+        }
+        this.#head = 0;
+        this.#tail = 0;
+        this.#free.length = 0;
+        this.#calculatedSize = 0;
+        this.#size = 0;
+        if (this.#hasDisposeAfter && this.#disposed) {
+          const dt = this.#disposed;
+          let task;
+          while (task = dt?.shift()) {
+            this.#disposeAfter?.(...task);
+          }
+        }
+      }
+    };
+    exports.LRUCache = LRUCache;
+  }
+});
+
+// node_modules/@octokit/auth-app/dist-node/index.js
+var require_dist_node19 = __commonJS({
+  "node_modules/@octokit/auth-app/dist-node/index.js"(exports, module2) {
+    "use strict";
+    var __defProp2 = Object.defineProperty;
+    var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
+    var __getOwnPropNames2 = Object.getOwnPropertyNames;
+    var __hasOwnProp2 = Object.prototype.hasOwnProperty;
+    var __export2 = (target, all) => {
+      for (var name in all)
+        __defProp2(target, name, { get: all[name], enumerable: true });
+    };
+    var __copyProps2 = (to, from, except, desc) => {
+      if (from && typeof from === "object" || typeof from === "function") {
+        for (let key of __getOwnPropNames2(from))
+          if (!__hasOwnProp2.call(to, key) && key !== except)
+            __defProp2(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc2(from, key)) || desc.enumerable });
+      }
+      return to;
+    };
+    var __toCommonJS2 = (mod) => __copyProps2(__defProp2({}, "__esModule", { value: true }), mod);
+    var dist_src_exports = {};
+    __export2(dist_src_exports, {
+      createAppAuth: () => createAppAuth,
+      createOAuthUserAuth: () => import_auth_oauth_user2.createOAuthUserAuth
+    });
+    module2.exports = __toCommonJS2(dist_src_exports);
+    var import_universal_user_agent = require_dist_node();
+    var import_request = require_dist_node5();
+    var import_auth_oauth_app = require_dist_node17();
+    var import_deprecation = require_dist_node3();
+    var import_universal_github_app_jwt = require_dist_node18();
     async function getAppAuthentication({
       appId,
       privateKey,
       timeDifference
     }) {
       try {
-        const appAuthentication = await universalGithubAppJwt.githubAppJwt({
+        const appAuthentication = await (0, import_universal_github_app_jwt.githubAppJwt)({
           id: +appId,
           privateKey,
           now: timeDifference && Math.floor(Date.now() / 1e3) + timeDifference
@@ -19130,18 +20932,21 @@ var require_dist_node19 = __commonJS({
         };
       } catch (error) {
         if (privateKey === "-----BEGIN RSA PRIVATE KEY-----") {
-          throw new Error("The 'privateKey` option contains only the first line '-----BEGIN RSA PRIVATE KEY-----'. If you are setting it using a `.env` file, make sure it is set on a single line with newlines replaced by '\n'");
+          throw new Error(
+            "The 'privateKey` option contains only the first line '-----BEGIN RSA PRIVATE KEY-----'. If you are setting it using a `.env` file, make sure it is set on a single line with newlines replaced by '\n'"
+          );
         } else {
           throw error;
         }
       }
     }
+    var import_lru_cache = require_cjs();
     function getCache() {
-      return new LRU({
+      return new import_lru_cache.LRUCache({
         // cache max. 15000 tokens, that will use less than 10mb memory
         max: 15e3,
         // Cache for 1 minute less than GitHub expiry
-        maxAge: 1e3 * 60 * 59
+        ttl: 1e3 * 60 * 59
       });
     }
     async function get(cache, options) {
@@ -19150,7 +20955,14 @@ var require_dist_node19 = __commonJS({
       if (!result) {
         return;
       }
-      const [token, createdAt, expiresAt, repositorySelection, permissionsString, singleFileName] = result.split("|");
+      const [
+        token,
+        createdAt,
+        expiresAt,
+        repositorySelection,
+        permissionsString,
+        singleFileName
+      ] = result.split("|");
       const permissions = options.permissions || permissionsString.split(/,/).reduce((permissions2, string) => {
         if (/!$/.test(string)) {
           permissions2[string.slice(0, -1)] = "write";
@@ -19172,8 +20984,17 @@ var require_dist_node19 = __commonJS({
     }
     async function set(cache, options, data) {
       const key = optionsToCacheKey(options);
-      const permissionsString = options.permissions ? "" : Object.keys(data.permissions).map((name) => `${name}${data.permissions[name] === "write" ? "!" : ""}`).join(",");
-      const value = [data.token, data.createdAt, data.expiresAt, data.repositorySelection, permissionsString, data.singleFileName].join("|");
+      const permissionsString = options.permissions ? "" : Object.keys(data.permissions).map(
+        (name) => `${name}${data.permissions[name] === "write" ? "!" : ""}`
+      ).join(",");
+      const value = [
+        data.token,
+        data.createdAt,
+        data.expiresAt,
+        data.repositorySelection,
+        permissionsString,
+        data.singleFileName
+      ].join("|");
       await cache.set(key, value);
     }
     function optionsToCacheKey({
@@ -19185,7 +21006,12 @@ var require_dist_node19 = __commonJS({
       const permissionsString = Object.keys(permissions).sort().map((name) => permissions[name] === "read" ? name : `${name}!`).join(",");
       const repositoryIdsString = repositoryIds.sort().join(",");
       const repositoryNamesString = repositoryNames.join(",");
-      return [installationId, repositoryIdsString, repositoryNamesString, permissionsString].filter(Boolean).join("|");
+      return [
+        installationId,
+        repositoryIdsString,
+        repositoryNamesString,
+        permissionsString
+      ].filter(Boolean).join("|");
     }
     function toTokenAuthentication({
       installationId,
@@ -19198,45 +21024,45 @@ var require_dist_node19 = __commonJS({
       repositoryNames,
       singleFileName
     }) {
-      return Object.assign({
-        type: "token",
-        tokenType: "installation",
-        token,
-        installationId,
-        permissions,
-        createdAt,
-        expiresAt,
-        repositorySelection
-      }, repositoryIds ? {
-        repositoryIds
-      } : null, repositoryNames ? {
-        repositoryNames
-      } : null, singleFileName ? {
-        singleFileName
-      } : null);
+      return Object.assign(
+        {
+          type: "token",
+          tokenType: "installation",
+          token,
+          installationId,
+          permissions,
+          createdAt,
+          expiresAt,
+          repositorySelection
+        },
+        repositoryIds ? { repositoryIds } : null,
+        repositoryNames ? { repositoryNames } : null,
+        singleFileName ? { singleFileName } : null
+      );
     }
     async function getInstallationAuthentication(state, options, customRequest) {
       const installationId = Number(options.installationId || state.installationId);
       if (!installationId) {
-        throw new Error("[@octokit/auth-app] installationId option is required for installation authentication.");
+        throw new Error(
+          "[@octokit/auth-app] installationId option is required for installation authentication."
+        );
       }
       if (options.factory) {
-        const {
-          type,
-          factory,
-          oauthApp,
-          ...factoryAuthOptions
-        } = {
+        const { type, factory, oauthApp, ...factoryAuthOptions } = {
           ...state,
           ...options
         };
         return factory(factoryAuthOptions);
       }
-      const optionsWithInstallationTokenFromState = Object.assign({
-        installationId
-      }, options);
+      const optionsWithInstallationTokenFromState = Object.assign(
+        { installationId },
+        options
+      );
       if (!options.refresh) {
-        const result = await get(state.cache, optionsWithInstallationTokenFromState);
+        const result = await get(
+          state.cache,
+          optionsWithInstallationTokenFromState
+        );
         if (result) {
           const {
             token: token2,
@@ -19262,7 +21088,7 @@ var require_dist_node19 = __commonJS({
         }
       }
       const appAuthentication = await getAppAuthentication(state);
-      const request2 = customRequest || state.request;
+      const request = customRequest || state.request;
       const {
         data: {
           token,
@@ -19272,7 +21098,7 @@ var require_dist_node19 = __commonJS({
           repository_selection: repositorySelectionOptional,
           single_file: singleFileName
         }
-      } = await request2("POST /app/installations/{installation_id}/access_tokens", {
+      } = await request("POST /app/installations/{installation_id}/access_tokens", {
         installation_id: installationId,
         repository_ids: options.repositoryIds,
         repositories: options.repositoryNames,
@@ -19288,7 +21114,7 @@ var require_dist_node19 = __commonJS({
       const repositorySelection = repositorySelectionOptional || "all";
       const repositoryIds = repositories ? repositories.map((r) => r.id) : void 0;
       const repositoryNames = repositories ? repositories.map((repo) => repo.name) : void 0;
-      const createdAt = new Date().toISOString();
+      const createdAt = (/* @__PURE__ */ new Date()).toISOString();
       await set(state.cache, optionsWithInstallationTokenFromState, {
         token,
         createdAt,
@@ -19318,13 +21144,14 @@ var require_dist_node19 = __commonJS({
         case "oauth":
           state.log.warn(
             // @ts-expect-error `log.warn()` expects string
-            new deprecation.Deprecation(`[@octokit/auth-app] {type: "oauth"} is deprecated. Use {type: "oauth-app"} instead`)
+            new import_deprecation.Deprecation(
+              `[@octokit/auth-app] {type: "oauth"} is deprecated. Use {type: "oauth-app"} instead`
+            )
           );
         case "oauth-app":
-          return state.oauthApp({
-            type: "oauth-app"
-          });
+          return state.oauthApp({ type: "oauth-app" });
         case "installation":
+          authOptions;
           return getInstallationAuthentication(state, {
             ...authOptions,
             type: "installation"
@@ -19335,34 +21162,60 @@ var require_dist_node19 = __commonJS({
           throw new Error(`Invalid auth type: ${authOptions.type}`);
       }
     }
-    var PATHS = ["/app", "/app/hook/config", "/app/hook/deliveries", "/app/hook/deliveries/{delivery_id}", "/app/hook/deliveries/{delivery_id}/attempts", "/app/installations", "/app/installations/{installation_id}", "/app/installations/{installation_id}/access_tokens", "/app/installations/{installation_id}/suspended", "/marketplace_listing/accounts/{account_id}", "/marketplace_listing/plan", "/marketplace_listing/plans", "/marketplace_listing/plans/{plan_id}/accounts", "/marketplace_listing/stubbed/accounts/{account_id}", "/marketplace_listing/stubbed/plan", "/marketplace_listing/stubbed/plans", "/marketplace_listing/stubbed/plans/{plan_id}/accounts", "/orgs/{org}/installation", "/repos/{owner}/{repo}/installation", "/users/{username}/installation"];
+    var import_auth_oauth_user = require_dist_node16();
+    var PATHS = [
+      "/app",
+      "/app/hook/config",
+      "/app/hook/deliveries",
+      "/app/hook/deliveries/{delivery_id}",
+      "/app/hook/deliveries/{delivery_id}/attempts",
+      "/app/installations",
+      "/app/installations/{installation_id}",
+      "/app/installations/{installation_id}/access_tokens",
+      "/app/installations/{installation_id}/suspended",
+      "/marketplace_listing/accounts/{account_id}",
+      "/marketplace_listing/plan",
+      "/marketplace_listing/plans",
+      "/marketplace_listing/plans/{plan_id}/accounts",
+      "/marketplace_listing/stubbed/accounts/{account_id}",
+      "/marketplace_listing/stubbed/plan",
+      "/marketplace_listing/stubbed/plans",
+      "/marketplace_listing/stubbed/plans/{plan_id}/accounts",
+      "/orgs/{org}/installation",
+      "/repos/{owner}/{repo}/installation",
+      "/users/{username}/installation"
+    ];
     function routeMatcher(paths) {
-      const regexes = paths.map((p) => p.split("/").map((c) => c.startsWith("{") ? "(?:.+?)" : c).join("/"));
-      const regex = `^(?:${regexes.map((r) => `(?:${r})`).join("|")})[^/]*$`;
+      const regexes = paths.map(
+        (p) => p.split("/").map((c) => c.startsWith("{") ? "(?:.+?)" : c).join("/")
+      );
+      const regex = `^(?:${regexes.map((r) => `(?:${r})`).join("|")})$`;
       return new RegExp(regex, "i");
     }
     var REGEX = routeMatcher(PATHS);
     function requiresAppAuth(url) {
-      return !!url && REGEX.test(url);
+      return !!url && REGEX.test(url.split("?")[0]);
     }
     var FIVE_SECONDS_IN_MS = 5 * 1e3;
     function isNotTimeSkewError(error) {
-      return !(error.message.match(/'Expiration time' claim \('exp'\) must be a numeric value representing the future time at which the assertion expires/) || error.message.match(/'Issued at' claim \('iat'\) must be an Integer representing the time that the assertion was issued/));
+      return !(error.message.match(
+        /'Expiration time' claim \('exp'\) must be a numeric value representing the future time at which the assertion expires/
+      ) || error.message.match(
+        /'Issued at' claim \('iat'\) must be an Integer representing the time that the assertion was issued/
+      ));
     }
-    async function hook(state, request2, route, parameters) {
-      const endpoint = request2.endpoint.merge(route, parameters);
+    async function hook(state, request, route, parameters) {
+      const endpoint = request.endpoint.merge(route, parameters);
       const url = endpoint.url;
       if (/\/login\/oauth\/access_token$/.test(url)) {
-        return request2(endpoint);
+        return request(endpoint);
       }
-      if (requiresAppAuth(url.replace(request2.endpoint.DEFAULTS.baseUrl, ""))) {
-        const {
-          token: token2
-        } = await getAppAuthentication(state);
+      if (requiresAppAuth(url.replace(request.endpoint.DEFAULTS.baseUrl, ""))) {
+        const { token: token2 } = await getAppAuthentication(state);
         endpoint.headers.authorization = `bearer ${token2}`;
         let response;
         try {
-          response = await request2(endpoint);
+          response = await request(endpoint);
         } catch (error) {
           if (isNotTimeSkewError(error)) {
             throw error;
@@ -19370,43 +21223,45 @@ var require_dist_node19 = __commonJS({
           if (typeof error.response.headers.date === "undefined") {
             throw error;
           }
-          const diff = Math.floor((Date.parse(error.response.headers.date) - Date.parse(new Date().toString())) / 1e3);
+          const diff = Math.floor(
+            (Date.parse(error.response.headers.date) - Date.parse((/* @__PURE__ */ new Date()).toString())) / 1e3
+          );
           state.log.warn(error.message);
-          state.log.warn(`[@octokit/auth-app] GitHub API time and system time are different by ${diff} seconds. Retrying request with the difference accounted for.`);
-          const {
-            token: token3
-          } = await getAppAuthentication({
+          state.log.warn(
+            `[@octokit/auth-app] GitHub API time and system time are different by ${diff} seconds. Retrying request with the difference accounted for.`
+          );
+          const { token: token3 } = await getAppAuthentication({
             ...state,
             timeDifference: diff
           });
           endpoint.headers.authorization = `bearer ${token3}`;
-          return request2(endpoint);
+          return request(endpoint);
         }
         return response;
       }
-      if (authOauthUser.requiresBasicAuth(url)) {
-        const authentication = await state.oauthApp({
-          type: "oauth-app"
-        });
+      if ((0, import_auth_oauth_user.requiresBasicAuth)(url)) {
+        const authentication = await state.oauthApp({ type: "oauth-app" });
         endpoint.headers.authorization = authentication.headers.authorization;
-        return request2(endpoint);
+        return request(endpoint);
       }
-      const {
-        token,
-        createdAt
-      } = await getInstallationAuthentication(
+      const { token, createdAt } = await getInstallationAuthentication(
         state,
         // @ts-expect-error TBD
         {},
-        request2
+        request
       );
       endpoint.headers.authorization = `token ${token}`;
-      return sendRequestWithRetries(state, request2, endpoint, createdAt);
+      return sendRequestWithRetries(
+        state,
+        request,
+        endpoint,
+        createdAt
+      );
     }
-    async function sendRequestWithRetries(state, request2, options, createdAt, retries = 0) {
-      const timeSinceTokenCreationInMs = +new Date() - +new Date(createdAt);
+    async function sendRequestWithRetries(state, request, options, createdAt, retries = 0) {
+      const timeSinceTokenCreationInMs = +/* @__PURE__ */ new Date() - +new Date(createdAt);
       try {
-        return await request2(options);
+        return await request(options);
       } catch (error) {
         if (error.status !== 401) {
           throw error;
@@ -19419,66 +21274,93 @@ var require_dist_node19 = __commonJS({
         }
         ++retries;
         const awaitTime = retries * 1e3;
-        state.log.warn(`[@octokit/auth-app] Retrying after 401 response to account for token replication delay (retry: ${retries}, wait: ${awaitTime / 1e3}s)`);
+        state.log.warn(
+          `[@octokit/auth-app] Retrying after 401 response to account for token replication delay (retry: ${retries}, wait: ${awaitTime / 1e3}s)`
+        );
         await new Promise((resolve) => setTimeout(resolve, awaitTime));
-        return sendRequestWithRetries(state, request2, options, createdAt, retries);
+        return sendRequestWithRetries(state, request, options, createdAt, retries);
       }
     }
-    var VERSION = "4.0.8";
+    var VERSION = "4.0.13";
+    var import_auth_oauth_user2 = require_dist_node16();
     function createAppAuth(options) {
       if (!options.appId) {
         throw new Error("[@octokit/auth-app] appId option is required");
       }
       if (!Number.isFinite(+options.appId)) {
-        throw new Error("[@octokit/auth-app] appId option must be a number or numeric string");
+        throw new Error(
+          "[@octokit/auth-app] appId option must be a number or numeric string"
+        );
       }
       if (!options.privateKey) {
         throw new Error("[@octokit/auth-app] privateKey option is required");
       }
       if ("installationId" in options && !options.installationId) {
-        throw new Error("[@octokit/auth-app] installationId is set to a falsy value");
+        throw new Error(
+          "[@octokit/auth-app] installationId is set to a falsy value"
+        );
       }
-      const log = Object.assign({
-        warn: console.warn.bind(console)
-      }, options.log);
-      const request$1 = options.request || request.request.defaults({
+      const log = Object.assign(
+        {
+          warn: console.warn.bind(console)
+        },
+        options.log
+      );
+      const request = options.request || import_request.request.defaults({
         headers: {
-          "user-agent": `octokit-auth-app.js/${VERSION} ${universalUserAgent.getUserAgent()}`
+          "user-agent": `octokit-auth-app.js/${VERSION} ${(0, import_universal_user_agent.getUserAgent)()}`
         }
       });
-      const state = Object.assign({
-        request: request$1,
-        cache: getCache()
-      }, options, options.installationId ? {
-        installationId: Number(options.installationId)
-      } : {}, {
-        log,
-        oauthApp: authOauthApp.createOAuthAppAuth({
-          clientType: "github-app",
-          clientId: options.clientId || "",
-          clientSecret: options.clientSecret || "",
-          request: request$1
-        })
-      });
+      const state = Object.assign(
+        {
+          request,
+          cache: getCache()
+        },
+        options,
+        options.installationId ? { installationId: Number(options.installationId) } : {},
+        {
+          log,
+          oauthApp: (0, import_auth_oauth_app.createOAuthAppAuth)({
+            clientType: "github-app",
+            clientId: options.clientId || "",
+            clientSecret: options.clientSecret || "",
+            request
+          })
+        }
+      );
       return Object.assign(auth.bind(null, state), {
         hook: hook.bind(null, state)
       });
     }
-    Object.defineProperty(exports, "createOAuthUserAuth", {
-      enumerable: true,
-      get: function() {
-        return authOauthUser.createOAuthUserAuth;
-      }
-    });
-    exports.createAppAuth = createAppAuth;
   }
 });
 
 // node_modules/@octokit/auth-unauthenticated/dist-node/index.js
 var require_dist_node20 = __commonJS({
-  "node_modules/@octokit/auth-unauthenticated/dist-node/index.js"(exports) {
+  "node_modules/@octokit/auth-unauthenticated/dist-node/index.js"(exports, module2) {
     "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
+    var __defProp2 = Object.defineProperty;
+    var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
+    var __getOwnPropNames2 = Object.getOwnPropertyNames;
+    var __hasOwnProp2 = Object.prototype.hasOwnProperty;
+    var __export2 = (target, all) => {
+      for (var name in all)
+        __defProp2(target, name, { get: all[name], enumerable: true });
+    };
+    var __copyProps2 = (to, from, except, desc) => {
+      if (from && typeof from === "object" || typeof from === "function") {
+        for (let key of __getOwnPropNames2(from))
+          if (!__hasOwnProp2.call(to, key) && key !== except)
+            __defProp2(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc2(from, key)) || desc.enumerable });
+      }
+      return to;
+    };
+    var __toCommonJS2 = (mod) => __copyProps2(__defProp2({}, "__esModule", { value: true }), mod);
+    var dist_src_exports = {};
+    __export2(dist_src_exports, {
+      createUnauthenticatedAuth: () => createUnauthenticatedAuth
+    });
+    module2.exports = __toCommonJS2(dist_src_exports);
     async function auth(reason) {
       return {
         type: "unauthenticated",
@@ -19502,7 +21384,10 @@ var require_dist_node20 = __commonJS({
       return REGEX_ABUSE_LIMIT_MESSAGE.test(error.message);
     }
     async function hook(reason, request, route, parameters) {
-      const endpoint = request.endpoint.merge(route, parameters);
+      const endpoint = request.endpoint.merge(
+        route,
+        parameters
+      );
       return request(endpoint).catch((error) => {
         if (error.status === 404) {
           error.message = `Not found. May be due to lack of authentication. Reason: ${reason}`;
@@ -19521,20 +21406,24 @@ var require_dist_node20 = __commonJS({
           throw error;
         }
         if (error.status >= 400 && error.status < 500) {
-          error.message = error.message.replace(/\.?$/, `. May be caused by lack of authentication (${reason}).`);
+          error.message = error.message.replace(
+            /\.?$/,
+            `. May be caused by lack of authentication (${reason}).`
+          );
         }
         throw error;
       });
     }
     var createUnauthenticatedAuth = function createUnauthenticatedAuth2(options) {
       if (!options || !options.reason) {
-        throw new Error("[@octokit/auth-unauthenticated] No reason passed to createUnauthenticatedAuth");
+        throw new Error(
+          "[@octokit/auth-unauthenticated] No reason passed to createUnauthenticatedAuth"
+        );
       }
       return Object.assign(auth.bind(null, options.reason), {
         hook: hook.bind(null, options.reason)
       });
     };
-    exports.createUnauthenticatedAuth = createUnauthenticatedAuth;
   }
 });
 
@@ -19552,20 +21441,47 @@ var require_fromentries = __commonJS({
 
 // node_modules/@octokit/oauth-app/dist-node/index.js
 var require_dist_node21 = __commonJS({
-  "node_modules/@octokit/oauth-app/dist-node/index.js"(exports) {
+  "node_modules/@octokit/oauth-app/dist-node/index.js"(exports, module2) {
     "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    function _interopDefault(ex) {
-      return ex && typeof ex === "object" && "default" in ex ? ex["default"] : ex;
-    }
-    var OAuthAppAuth = require_dist_node17();
-    var core2 = require_dist_node8();
-    var universalUserAgent = require_dist_node();
-    var authOauthUser = require_dist_node16();
-    var OAuthMethods = require_dist_node14();
-    var authUnauthenticated = require_dist_node20();
-    var fromEntries = _interopDefault(require_fromentries());
-    var VERSION = "4.2.0";
+    var __create2 = Object.create;
+    var __defProp2 = Object.defineProperty;
+    var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
+    var __getOwnPropNames2 = Object.getOwnPropertyNames;
+    var __getProtoOf2 = Object.getPrototypeOf;
+    var __hasOwnProp2 = Object.prototype.hasOwnProperty;
+    var __export2 = (target, all) => {
+      for (var name in all)
+        __defProp2(target, name, { get: all[name], enumerable: true });
+    };
+    var __copyProps2 = (to, from, except, desc) => {
+      if (from && typeof from === "object" || typeof from === "function") {
+        for (let key of __getOwnPropNames2(from))
+          if (!__hasOwnProp2.call(to, key) && key !== except)
+            __defProp2(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc2(from, key)) || desc.enumerable });
+      }
+      return to;
+    };
+    var __toESM2 = (mod, isNodeMode, target) => (target = mod != null ? __create2(__getProtoOf2(mod)) : {}, __copyProps2(
+      // If the importer is in node compatibility mode or this is not an ESM
+      // file that has been converted to a CommonJS file using a Babel-
+      // compatible transform (i.e. "__esModule" has not been set), then set
+      // "default" to the CommonJS "module.exports" for node compatibility.
+      isNodeMode || !mod || !mod.__esModule ? __defProp2(target, "default", { value: mod, enumerable: true }) : target,
+      mod
+    ));
+    var __toCommonJS2 = (mod) => __copyProps2(__defProp2({}, "__esModule", { value: true }), mod);
+    var dist_src_exports = {};
+    __export2(dist_src_exports, {
+      OAuthApp: () => OAuthApp,
+      createAWSLambdaAPIGatewayV2Handler: () => createAWSLambdaAPIGatewayV2Handler,
+      createCloudflareHandler: () => createCloudflareHandler,
+      createNodeMiddleware: () => createNodeMiddleware2,
+      createWebWorkerHandler: () => createWebWorkerHandler,
+      handleRequest: () => handleRequest
+    });
+    module2.exports = __toCommonJS2(dist_src_exports);
+    var import_auth_oauth_app = require_dist_node17();
+    var VERSION = "4.2.2";
     function addEventHandler(state, eventName, eventHandler) {
       if (Array.isArray(eventName)) {
         for (const singleEventName of eventName) {
@@ -19578,14 +21494,14 @@ var require_dist_node21 = __commonJS({
       }
       state.eventHandlers[eventName].push(eventHandler);
     }
-    var OAuthAppOctokit = core2.Octokit.defaults({
-      userAgent: `octokit-oauth-app.js/${VERSION} ${universalUserAgent.getUserAgent()}`
+    var import_core = require_dist_node8();
+    var import_universal_user_agent = require_dist_node();
+    var OAuthAppOctokit = import_core.Octokit.defaults({
+      userAgent: `octokit-oauth-app.js/${VERSION} ${(0, import_universal_user_agent.getUserAgent)()}`
     });
+    var import_auth_oauth_user = require_dist_node16();
     async function emitEvent(state, context) {
-      const {
-        name,
-        action
-      } = context;
+      const { name, action } = context;
       if (state.eventHandlers[`${name}.${action}`]) {
         for (const eventHandler of state.eventHandlers[`${name}.${action}`]) {
           await eventHandler(context);
@@ -19603,7 +21519,7 @@ var require_dist_node21 = __commonJS({
         ...options,
         async factory(options2) {
           const octokit = new state.Octokit({
-            authStrategy: authOauthUser.createOAuthUserAuth,
+            authStrategy: import_auth_oauth_user.createOAuthUserAuth,
             auth: options2
           });
           const authentication = await octokit.auth({
@@ -19621,30 +21537,22 @@ var require_dist_node21 = __commonJS({
         }
       });
     }
+    var OAuthMethods = __toESM2(require_dist_node14());
     function getWebFlowAuthorizationUrlWithState(state, options) {
-      let allowSignup;
-      if (options.allowSignup === void 0 && state.allowSignup === void 0) {
-        allowSignup = true;
-      } else if (options.allowSignup === void 0 && state.allowSignup !== void 0) {
-        allowSignup = state.allowSignup;
-      } else if (state.allowSignup === void 0 && options.allowSignup !== void 0) {
-        allowSignup = options.allowSignup;
-      } else {
-        allowSignup = options.allowSignup || state.allowSignup;
-      }
       const optionsWithDefaults = {
         clientId: state.clientId,
         request: state.octokit.request,
         ...options,
-        allowSignup,
-        redirectUrl: options.redirectUrl || state.redirectUrl,
-        scopes: options.scopes || state.defaultScopes
+        allowSignup: state.allowSignup ?? options.allowSignup,
+        redirectUrl: options.redirectUrl ?? state.redirectUrl,
+        scopes: options.scopes ?? state.defaultScopes
       };
       return OAuthMethods.getWebFlowAuthorizationUrl({
         clientType: state.clientType,
         ...optionsWithDefaults
       });
     }
+    var OAuthAppAuth = __toESM2(require_dist_node17());
     async function createTokenWithState(state, options) {
       const authentication = await state.octokit.auth({
         type: "oauth-user",
@@ -19670,12 +21578,11 @@ var require_dist_node21 = __commonJS({
           }
         })
       });
-      return {
-        authentication
-      };
+      return { authentication };
     }
+    var OAuthMethods2 = __toESM2(require_dist_node14());
     async function checkTokenWithState(state, options) {
-      const result = await OAuthMethods.checkToken({
+      const result = await OAuthMethods2.checkToken({
         // @ts-expect-error not worth the extra code to appease TS
         clientType: state.clientType,
         clientId: state.clientId,
@@ -19683,12 +21590,11 @@ var require_dist_node21 = __commonJS({
         request: state.octokit.request,
         ...options
       });
-      Object.assign(result.authentication, {
-        type: "token",
-        tokenType: "oauth"
-      });
+      Object.assign(result.authentication, { type: "token", tokenType: "oauth" });
       return result;
     }
+    var OAuthMethods3 = __toESM2(require_dist_node14());
+    var import_auth_oauth_user2 = require_dist_node16();
     async function resetTokenWithState(state, options) {
       const optionsWithDefaults = {
         clientId: state.clientId,
@@ -19697,7 +21603,7 @@ var require_dist_node21 = __commonJS({
         ...options
       };
       if (state.clientType === "oauth-app") {
-        const response2 = await OAuthMethods.resetToken({
+        const response2 = await OAuthMethods3.resetToken({
           clientType: "oauth-app",
           ...optionsWithDefaults
         });
@@ -19712,7 +21618,7 @@ var require_dist_node21 = __commonJS({
           scopes: response2.authentication.scopes || void 0,
           authentication: authentication2,
           octokit: new state.Octokit({
-            authStrategy: authOauthUser.createOAuthUserAuth,
+            authStrategy: import_auth_oauth_user2.createOAuthUserAuth,
             auth: {
               clientType: state.clientType,
               clientId: state.clientId,
@@ -19722,12 +21628,9 @@ var require_dist_node21 = __commonJS({
             }
           })
         });
-        return {
-          ...response2,
-          authentication: authentication2
-        };
+        return { ...response2, authentication: authentication2 };
       }
-      const response = await OAuthMethods.resetToken({
+      const response = await OAuthMethods3.resetToken({
         clientType: "github-app",
         ...optionsWithDefaults
       });
@@ -19741,7 +21644,7 @@ var require_dist_node21 = __commonJS({
         token: response.authentication.token,
         authentication,
         octokit: new state.Octokit({
-          authStrategy: authOauthUser.createOAuthUserAuth,
+          authStrategy: import_auth_oauth_user2.createOAuthUserAuth,
           auth: {
             clientType: state.clientType,
             clientId: state.clientId,
@@ -19750,16 +21653,17 @@ var require_dist_node21 = __commonJS({
           }
         })
       });
-      return {
-        ...response,
-        authentication
-      };
+      return { ...response, authentication };
     }
+    var OAuthMethods4 = __toESM2(require_dist_node14());
+    var import_auth_oauth_user3 = require_dist_node16();
     async function refreshTokenWithState(state, options) {
       if (state.clientType === "oauth-app") {
-        throw new Error("[@octokit/oauth-app] app.refreshToken() is not supported for OAuth Apps");
+        throw new Error(
+          "[@octokit/oauth-app] app.refreshToken() is not supported for OAuth Apps"
+        );
       }
-      const response = await OAuthMethods.refreshToken({
+      const response = await OAuthMethods4.refreshToken({
         clientType: "github-app",
         clientId: state.clientId,
         clientSecret: state.clientSecret,
@@ -19776,7 +21680,7 @@ var require_dist_node21 = __commonJS({
         token: response.authentication.token,
         authentication,
         octokit: new state.Octokit({
-          authStrategy: authOauthUser.createOAuthUserAuth,
+          authStrategy: import_auth_oauth_user3.createOAuthUserAuth,
           auth: {
             clientType: state.clientType,
             clientId: state.clientId,
@@ -19785,16 +21689,17 @@ var require_dist_node21 = __commonJS({
           }
         })
       });
-      return {
-        ...response,
-        authentication
-      };
+      return { ...response, authentication };
     }
+    var OAuthMethods5 = __toESM2(require_dist_node14());
+    var import_auth_oauth_user4 = require_dist_node16();
     async function scopeTokenWithState(state, options) {
       if (state.clientType === "oauth-app") {
-        throw new Error("[@octokit/oauth-app] app.scopeToken() is not supported for OAuth Apps");
+        throw new Error(
+          "[@octokit/oauth-app] app.scopeToken() is not supported for OAuth Apps"
+        );
       }
-      const response = await OAuthMethods.scopeToken({
+      const response = await OAuthMethods5.scopeToken({
         clientType: "github-app",
         clientId: state.clientId,
         clientSecret: state.clientSecret,
@@ -19811,7 +21716,7 @@ var require_dist_node21 = __commonJS({
         token: response.authentication.token,
         authentication,
         octokit: new state.Octokit({
-          authStrategy: authOauthUser.createOAuthUserAuth,
+          authStrategy: import_auth_oauth_user4.createOAuthUserAuth,
           auth: {
             clientType: state.clientType,
             clientId: state.clientId,
@@ -19820,11 +21725,10 @@ var require_dist_node21 = __commonJS({
           }
         })
       });
-      return {
-        ...response,
-        authentication
-      };
+      return { ...response, authentication };
     }
+    var OAuthMethods6 = __toESM2(require_dist_node14());
+    var import_auth_unauthenticated = require_dist_node20();
     async function deleteTokenWithState(state, options) {
       const optionsWithDefaults = {
         clientId: state.clientId,
@@ -19832,12 +21736,12 @@ var require_dist_node21 = __commonJS({
         request: state.octokit.request,
         ...options
       };
-      const response = state.clientType === "oauth-app" ? await OAuthMethods.deleteToken({
+      const response = state.clientType === "oauth-app" ? await OAuthMethods6.deleteToken({
         clientType: "oauth-app",
         ...optionsWithDefaults
       }) : (
         // istanbul ignore next
-        await OAuthMethods.deleteToken({
+        await OAuthMethods6.deleteToken({
           clientType: "github-app",
           ...optionsWithDefaults
         })
@@ -19847,7 +21751,7 @@ var require_dist_node21 = __commonJS({
         action: "deleted",
         token: options.token,
         octokit: new state.Octokit({
-          authStrategy: authUnauthenticated.createUnauthenticatedAuth,
+          authStrategy: import_auth_unauthenticated.createUnauthenticatedAuth,
           auth: {
             reason: `Handling "token.deleted" event. The access for the token has been revoked.`
           }
@@ -19855,6 +21759,8 @@ var require_dist_node21 = __commonJS({
       });
       return response;
     }
+    var OAuthMethods7 = __toESM2(require_dist_node14());
+    var import_auth_unauthenticated2 = require_dist_node20();
     async function deleteAuthorizationWithState(state, options) {
       const optionsWithDefaults = {
         clientId: state.clientId,
@@ -19862,12 +21768,12 @@ var require_dist_node21 = __commonJS({
         request: state.octokit.request,
         ...options
       };
-      const response = state.clientType === "oauth-app" ? await OAuthMethods.deleteAuthorization({
+      const response = state.clientType === "oauth-app" ? await OAuthMethods7.deleteAuthorization({
         clientType: "oauth-app",
         ...optionsWithDefaults
       }) : (
         // istanbul ignore next
-        await OAuthMethods.deleteAuthorization({
+        await OAuthMethods7.deleteAuthorization({
           clientType: "github-app",
           ...optionsWithDefaults
         })
@@ -19877,7 +21783,7 @@ var require_dist_node21 = __commonJS({
         action: "deleted",
         token: options.token,
         octokit: new state.Octokit({
-          authStrategy: authUnauthenticated.createUnauthenticatedAuth,
+          authStrategy: import_auth_unauthenticated2.createUnauthenticatedAuth,
           auth: {
             reason: `Handling "token.deleted" event. The access for the token has been revoked.`
           }
@@ -19888,7 +21794,7 @@ var require_dist_node21 = __commonJS({
         action: "deleted",
         token: options.token,
         octokit: new state.Octokit({
-          authStrategy: authUnauthenticated.createUnauthenticatedAuth,
+          authStrategy: import_auth_unauthenticated2.createUnauthenticatedAuth,
           auth: {
             reason: `Handling "authorization.deleted" event. The access for the app has been revoked.`
           }
@@ -19896,9 +21802,9 @@ var require_dist_node21 = __commonJS({
       });
       return response;
     }
-    async function handleRequest(app, {
-      pathPrefix = "/api/github/oauth"
-    }, request) {
+    var import_fromentries = __toESM2(require_fromentries());
+    async function handleRequest(app, { pathPrefix = "/api/github/oauth" }, request) {
+      var _a, _b, _c, _d, _e, _f;
       if (request.method === "OPTIONS") {
         return {
           status: 200,
@@ -19909,9 +21815,7 @@ var require_dist_node21 = __commonJS({
           }
         };
       }
-      const {
-        pathname
-      } = new URL(request.url, "http://localhost");
+      const { pathname } = new URL(request.url, "http://localhost");
       const route = [request.method, pathname].join(" ");
       const routes = {
         getLogin: `GET ${pathPrefix}/login`,
@@ -19943,40 +21847,30 @@ var require_dist_node21 = __commonJS({
           })
         };
       }
-      const {
-        searchParams
-      } = new URL(request.url, "http://localhost");
-      const query = fromEntries(searchParams);
+      const { searchParams } = new URL(request.url, "http://localhost");
+      const query = (0, import_fromentries.default)(searchParams);
       const headers = request.headers;
       try {
-        var _headers$authorizatio6;
         if (route === routes.getLogin) {
-          const {
-            url
-          } = app.getWebFlowAuthorizationUrl({
+          const { url } = app.getWebFlowAuthorizationUrl({
             state: query.state,
             scopes: query.scopes ? query.scopes.split(",") : void 0,
             allowSignup: query.allowSignup ? query.allowSignup === "true" : void 0,
             redirectUrl: query.redirectUrl
           });
-          return {
-            status: 302,
-            headers: {
-              location: url
-            }
-          };
+          return { status: 302, headers: { location: url } };
         }
         if (route === routes.getCallback) {
           if (query.error) {
-            throw new Error(`[@octokit/oauth-app] ${query.error} ${query.error_description}`);
+            throw new Error(
+              `[@octokit/oauth-app] ${query.error} ${query.error_description}`
+            );
           }
           if (!query.code) {
             throw new Error('[@octokit/oauth-app] "code" parameter is required');
           }
           const {
-            authentication: {
-              token: token2
-            }
+            authentication: { token: token2 }
           } = await app.createToken({
             code: query.code
           });
@@ -19991,10 +21885,7 @@ var require_dist_node21 = __commonJS({
           };
         }
         if (route === routes.createToken) {
-          const {
-            code,
-            redirectUrl
-          } = json;
+          const { code, redirectUrl } = json;
           if (!code) {
             throw new Error('[@octokit/oauth-app] "code" parameter is required');
           }
@@ -20013,10 +21904,11 @@ var require_dist_node21 = __commonJS({
           };
         }
         if (route === routes.getToken) {
-          var _headers$authorizatio;
-          const token2 = (_headers$authorizatio = headers.authorization) === null || _headers$authorizatio === void 0 ? void 0 : _headers$authorizatio.substr("token ".length);
+          const token2 = (_a = headers.authorization) == null ? void 0 : _a.substr("token ".length);
           if (!token2) {
-            throw new Error('[@octokit/oauth-app] "Authorization" header is required');
+            throw new Error(
+              '[@octokit/oauth-app] "Authorization" header is required'
+            );
           }
           const result = await app.checkToken({
             token: token2
@@ -20032,14 +21924,13 @@ var require_dist_node21 = __commonJS({
           };
         }
         if (route === routes.patchToken) {
-          var _headers$authorizatio2;
-          const token2 = (_headers$authorizatio2 = headers.authorization) === null || _headers$authorizatio2 === void 0 ? void 0 : _headers$authorizatio2.substr("token ".length);
+          const token2 = (_b = headers.authorization) == null ? void 0 : _b.substr("token ".length);
           if (!token2) {
-            throw new Error('[@octokit/oauth-app] "Authorization" header is required');
+            throw new Error(
+              '[@octokit/oauth-app] "Authorization" header is required'
+            );
           }
-          const result = await app.resetToken({
-            token: token2
-          });
+          const result = await app.resetToken({ token: token2 });
           delete result.authentication.clientSecret;
           return {
             status: 200,
@@ -20051,20 +21942,19 @@ var require_dist_node21 = __commonJS({
           };
         }
         if (route === routes.patchRefreshToken) {
-          var _headers$authorizatio3;
-          const token2 = (_headers$authorizatio3 = headers.authorization) === null || _headers$authorizatio3 === void 0 ? void 0 : _headers$authorizatio3.substr("token ".length);
+          const token2 = (_c = headers.authorization) == null ? void 0 : _c.substr("token ".length);
           if (!token2) {
-            throw new Error('[@octokit/oauth-app] "Authorization" header is required');
+            throw new Error(
+              '[@octokit/oauth-app] "Authorization" header is required'
+            );
           }
-          const {
-            refreshToken
-          } = json;
-          if (!refreshToken) {
-            throw new Error("[@octokit/oauth-app] refreshToken must be sent in request body");
+          const { refreshToken: refreshToken2 } = json;
+          if (!refreshToken2) {
+            throw new Error(
+              "[@octokit/oauth-app] refreshToken must be sent in request body"
+            );
           }
-          const result = await app.refreshToken({
-            refreshToken
-          });
+          const result = await app.refreshToken({ refreshToken: refreshToken2 });
           delete result.authentication.clientSecret;
           return {
             status: 200,
@@ -20076,10 +21966,11 @@ var require_dist_node21 = __commonJS({
           };
         }
         if (route === routes.scopeToken) {
-          var _headers$authorizatio4;
-          const token2 = (_headers$authorizatio4 = headers.authorization) === null || _headers$authorizatio4 === void 0 ? void 0 : _headers$authorizatio4.substr("token ".length);
+          const token2 = (_d = headers.authorization) == null ? void 0 : _d.substr("token ".length);
           if (!token2) {
-            throw new Error('[@octokit/oauth-app] "Authorization" header is required');
+            throw new Error(
+              '[@octokit/oauth-app] "Authorization" header is required'
+            );
           }
           const result = await app.scopeToken({
             token: token2,
@@ -20096,33 +21987,32 @@ var require_dist_node21 = __commonJS({
           };
         }
         if (route === routes.deleteToken) {
-          var _headers$authorizatio5;
-          const token2 = (_headers$authorizatio5 = headers.authorization) === null || _headers$authorizatio5 === void 0 ? void 0 : _headers$authorizatio5.substr("token ".length);
+          const token2 = (_e = headers.authorization) == null ? void 0 : _e.substr("token ".length);
           if (!token2) {
-            throw new Error('[@octokit/oauth-app] "Authorization" header is required');
+            throw new Error(
+              '[@octokit/oauth-app] "Authorization" header is required'
+            );
           }
           await app.deleteToken({
             token: token2
           });
           return {
             status: 204,
-            headers: {
-              "access-control-allow-origin": "*"
-            }
+            headers: { "access-control-allow-origin": "*" }
           };
         }
-        const token = (_headers$authorizatio6 = headers.authorization) === null || _headers$authorizatio6 === void 0 ? void 0 : _headers$authorizatio6.substr("token ".length);
+        const token = (_f = headers.authorization) == null ? void 0 : _f.substr("token ".length);
         if (!token) {
-          throw new Error('[@octokit/oauth-app] "Authorization" header is required');
+          throw new Error(
+            '[@octokit/oauth-app] "Authorization" header is required'
+          );
         }
         await app.deleteAuthorization({
           token
         });
         return {
           status: 204,
-          headers: {
-            "access-control-allow-origin": "*"
-          }
+          headers: { "access-control-allow-origin": "*" }
         };
       } catch (error) {
         return {
@@ -20131,18 +22021,12 @@ var require_dist_node21 = __commonJS({
             "content-type": "application/json",
             "access-control-allow-origin": "*"
           },
-          text: JSON.stringify({
-            error: error.message
-          })
+          text: JSON.stringify({ error: error.message })
         };
       }
     }
     function parseRequest(request) {
-      const {
-        method,
-        url,
-        headers
-      } = request;
+      const { method, url, headers } = request;
       async function text() {
         const text2 = await new Promise((resolve, reject) => {
           let bodyChunks = [];
@@ -20150,12 +22034,7 @@ var require_dist_node21 = __commonJS({
         });
         return text2;
       }
-      return {
-        method,
-        url,
-        headers,
-        text
-      };
+      return { method, url, headers, text };
     }
     function sendResponse(octokitResponse, response) {
       response.writeHead(octokitResponse.status, octokitResponse.headers);
@@ -20164,9 +22043,7 @@ var require_dist_node21 = __commonJS({
     function onUnhandledRequestDefault(request) {
       return {
         status: 404,
-        headers: {
-          "content-type": "application/json"
-        },
+        headers: { "content-type": "application/json" },
         text: JSON.stringify({
           error: `Unknown route: ${request.method} ${request.url}`
         })
@@ -20177,19 +22054,23 @@ var require_dist_node21 = __commonJS({
       const octokitResponse = onUnhandledRequestDefault(octokitRequest);
       sendResponse(octokitResponse, response);
     }
-    function createNodeMiddleware(app, {
+    function createNodeMiddleware2(app, {
       pathPrefix,
       onUnhandledRequest
     } = {}) {
       if (onUnhandledRequest) {
-        app.octokit.log.warn("[@octokit/oauth-app] `onUnhandledRequest` is deprecated and will be removed from the next major version.");
+        app.octokit.log.warn(
+          "[@octokit/oauth-app] `onUnhandledRequest` is deprecated and will be removed from the next major version."
+        );
       }
       onUnhandledRequest ?? (onUnhandledRequest = onUnhandledRequestDefaultNode);
       return async function(request, response, next) {
         const octokitRequest = parseRequest(request);
-        const octokitResponse = await handleRequest(app, {
-          pathPrefix
-        }, octokitRequest);
+        const octokitResponse = await handleRequest(
+          app,
+          { pathPrefix },
+          octokitRequest
+        );
         if (octokitResponse) {
           sendResponse(octokitResponse, response);
         } else if (typeof next === "function") {
@@ -20199,7 +22080,7 @@ var require_dist_node21 = __commonJS({
         }
       };
     }
-    function parseRequest$1(request) {
+    function parseRequest2(request) {
       const headers = Object.fromEntries(request.headers.entries());
       return {
         method: request.method,
@@ -20208,59 +22089,56 @@ var require_dist_node21 = __commonJS({
         text: () => request.text()
       };
     }
-    function sendResponse$1(octokitResponse) {
+    function sendResponse2(octokitResponse) {
       return new Response(octokitResponse.text, {
         status: octokitResponse.status,
         headers: octokitResponse.headers
       });
     }
     async function onUnhandledRequestDefaultWebWorker(request) {
-      const octokitRequest = parseRequest$1(request);
+      const octokitRequest = parseRequest2(request);
       const octokitResponse = onUnhandledRequestDefault(octokitRequest);
-      return sendResponse$1(octokitResponse);
+      return sendResponse2(octokitResponse);
     }
     function createWebWorkerHandler(app, {
       pathPrefix,
       onUnhandledRequest
     } = {}) {
       if (onUnhandledRequest) {
-        app.octokit.log.warn("[@octokit/oauth-app] `onUnhandledRequest` is deprecated and will be removed from the next major version.");
+        app.octokit.log.warn(
+          "[@octokit/oauth-app] `onUnhandledRequest` is deprecated and will be removed from the next major version."
+        );
       }
       onUnhandledRequest ?? (onUnhandledRequest = onUnhandledRequestDefaultWebWorker);
       return async function(request) {
-        const octokitRequest = parseRequest$1(request);
-        const octokitResponse = await handleRequest(app, {
-          pathPrefix
-        }, octokitRequest);
-        return octokitResponse ? sendResponse$1(octokitResponse) : await onUnhandledRequest(request);
+        const octokitRequest = parseRequest2(request);
+        const octokitResponse = await handleRequest(
+          app,
+          { pathPrefix },
+          octokitRequest
+        );
+        return octokitResponse ? sendResponse2(octokitResponse) : await onUnhandledRequest(request);
       };
     }
     function createCloudflareHandler(...args) {
-      args[0].octokit.log.warn("[@octokit/oauth-app] `createCloudflareHandler` is deprecated, use `createWebWorkerHandler` instead");
+      args[0].octokit.log.warn(
+        "[@octokit/oauth-app] `createCloudflareHandler` is deprecated, use `createWebWorkerHandler` instead"
+      );
       return createWebWorkerHandler(...args);
     }
-    function parseRequest$2(request) {
-      const {
-        method
-      } = request.requestContext.http;
+    function parseRequest3(request) {
+      const { method } = request.requestContext.http;
       let url = request.rawPath;
-      const {
-        stage
-      } = request.requestContext;
+      const { stage } = request.requestContext;
       if (url.startsWith("/" + stage))
         url = url.substring(stage.length + 1);
       if (request.rawQueryString)
         url += "?" + request.rawQueryString;
       const headers = request.headers;
       const text = async () => request.body || "";
-      return {
-        method,
-        url,
-        headers,
-        text
-      };
+      return { method, url, headers, text };
     }
-    function sendResponse$2(octokitResponse) {
+    function sendResponse3(octokitResponse) {
       return {
         statusCode: octokitResponse.status,
         headers: octokitResponse.headers,
@@ -20268,24 +22146,24 @@ var require_dist_node21 = __commonJS({
       };
     }
     async function onUnhandledRequestDefaultAWSAPIGatewayV2(event) {
-      const request = parseRequest$2(event);
+      const request = parseRequest3(event);
       const response = onUnhandledRequestDefault(request);
-      return sendResponse$2(response);
+      return sendResponse3(response);
     }
     function createAWSLambdaAPIGatewayV2Handler(app, {
       pathPrefix,
       onUnhandledRequest
     } = {}) {
       if (onUnhandledRequest) {
-        app.octokit.log.warn("[@octokit/oauth-app] `onUnhandledRequest` is deprecated and will be removed from the next major version.");
+        app.octokit.log.warn(
+          "[@octokit/oauth-app] `onUnhandledRequest` is deprecated and will be removed from the next major version."
+        );
       }
       onUnhandledRequest ?? (onUnhandledRequest = onUnhandledRequestDefaultAWSAPIGatewayV2);
       return async function(event) {
-        const request = parseRequest$2(event);
-        const response = await handleRequest(app, {
-          pathPrefix
-        }, request);
-        return response ? sendResponse$2(response) : onUnhandledRequest(event);
+        const request = parseRequest3(event);
+        const response = await handleRequest(app, { pathPrefix }, request);
+        return response ? sendResponse3(response) : onUnhandledRequest(event);
       };
     }
     var OAuthApp = class {
@@ -20304,7 +22182,7 @@ var require_dist_node21 = __commonJS({
         const Octokit2 = options.Octokit || OAuthAppOctokit;
         this.type = options.clientType || "oauth-app";
         const octokit = new Octokit2({
-          authStrategy: OAuthAppAuth.createOAuthAppAuth,
+          authStrategy: import_auth_oauth_app.createOAuthAppAuth,
           auth: {
             clientType: this.type,
             clientId: options.clientId,
@@ -20328,23 +22206,35 @@ var require_dist_node21 = __commonJS({
         this.on = addEventHandler.bind(null, state);
         this.octokit = octokit;
         this.getUserOctokit = getUserOctokitWithState.bind(null, state);
-        this.getWebFlowAuthorizationUrl = getWebFlowAuthorizationUrlWithState.bind(null, state);
-        this.createToken = createTokenWithState.bind(null, state);
-        this.checkToken = checkTokenWithState.bind(null, state);
-        this.resetToken = resetTokenWithState.bind(null, state);
-        this.refreshToken = refreshTokenWithState.bind(null, state);
-        this.scopeToken = scopeTokenWithState.bind(null, state);
+        this.getWebFlowAuthorizationUrl = getWebFlowAuthorizationUrlWithState.bind(
+          null,
+          state
+        );
+        this.createToken = createTokenWithState.bind(
+          null,
+          state
+        );
+        this.checkToken = checkTokenWithState.bind(
+          null,
+          state
+        );
+        this.resetToken = resetTokenWithState.bind(
+          null,
+          state
+        );
+        this.refreshToken = refreshTokenWithState.bind(
+          null,
+          state
+        );
+        this.scopeToken = scopeTokenWithState.bind(
+          null,
+          state
+        );
         this.deleteToken = deleteTokenWithState.bind(null, state);
         this.deleteAuthorization = deleteAuthorizationWithState.bind(null, state);
       }
     };
     OAuthApp.VERSION = VERSION;
-    exports.OAuthApp = OAuthApp;
-    exports.createAWSLambdaAPIGatewayV2Handler = createAWSLambdaAPIGatewayV2Handler;
-    exports.createCloudflareHandler = createCloudflareHandler;
-    exports.createNodeMiddleware = createNodeMiddleware;
-    exports.createWebWorkerHandler = createWebWorkerHandler;
-    exports.handleRequest = handleRequest;
   }
 });
 
@@ -20510,14 +22400,43 @@ var require_dist_node22 = __commonJS({
 
 // node_modules/@octokit/webhooks/dist-node/index.js
 var require_dist_node23 = __commonJS({
-  "node_modules/@octokit/webhooks/dist-node/index.js"(exports) {
+  "node_modules/@octokit/webhooks/dist-node/index.js"(exports, module2) {
     "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    function _interopDefault(ex) {
-      return ex && typeof ex === "object" && "default" in ex ? ex["default"] : ex;
-    }
-    var AggregateError = _interopDefault(require_aggregate_error());
-    var webhooksMethods = require_dist_node22();
+    var __create2 = Object.create;
+    var __defProp2 = Object.defineProperty;
+    var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
+    var __getOwnPropNames2 = Object.getOwnPropertyNames;
+    var __getProtoOf2 = Object.getPrototypeOf;
+    var __hasOwnProp2 = Object.prototype.hasOwnProperty;
+    var __export2 = (target, all) => {
+      for (var name in all)
+        __defProp2(target, name, { get: all[name], enumerable: true });
+    };
+    var __copyProps2 = (to, from, except, desc) => {
+      if (from && typeof from === "object" || typeof from === "function") {
+        for (let key of __getOwnPropNames2(from))
+          if (!__hasOwnProp2.call(to, key) && key !== except)
+            __defProp2(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc2(from, key)) || desc.enumerable });
+      }
+      return to;
+    };
+    var __toESM2 = (mod, isNodeMode, target) => (target = mod != null ? __create2(__getProtoOf2(mod)) : {}, __copyProps2(
+      // If the importer is in node compatibility mode or this is not an ESM
+      // file that has been converted to a CommonJS file using a Babel-
+      // compatible transform (i.e. "__esModule" has not been set), then set
+      // "default" to the CommonJS "module.exports" for node compatibility.
+      isNodeMode || !mod || !mod.__esModule ? __defProp2(target, "default", { value: mod, enumerable: true }) : target,
+      mod
+    ));
+    var __toCommonJS2 = (mod) => __copyProps2(__defProp2({}, "__esModule", { value: true }), mod);
+    var dist_src_exports = {};
+    __export2(dist_src_exports, {
+      Webhooks: () => Webhooks,
+      createEventHandler: () => createEventHandler,
+      createNodeMiddleware: () => createNodeMiddleware2,
+      emitterEventNames: () => emitterEventNames
+    });
+    module2.exports = __toCommonJS2(dist_src_exports);
     var createLogger = (logger) => ({
       debug: () => {
       },
@@ -20527,7 +22446,266 @@ var require_dist_node23 = __commonJS({
       error: console.error.bind(console),
       ...logger
     });
-    var emitterEventNames = ["branch_protection_rule", "branch_protection_rule.created", "branch_protection_rule.deleted", "branch_protection_rule.edited", "check_run", "check_run.completed", "check_run.created", "check_run.requested_action", "check_run.rerequested", "check_suite", "check_suite.completed", "check_suite.requested", "check_suite.rerequested", "code_scanning_alert", "code_scanning_alert.appeared_in_branch", "code_scanning_alert.closed_by_user", "code_scanning_alert.created", "code_scanning_alert.fixed", "code_scanning_alert.reopened", "code_scanning_alert.reopened_by_user", "commit_comment", "commit_comment.created", "create", "delete", "dependabot_alert", "dependabot_alert.created", "dependabot_alert.dismissed", "dependabot_alert.fixed", "dependabot_alert.reintroduced", "dependabot_alert.reopened", "deploy_key", "deploy_key.created", "deploy_key.deleted", "deployment", "deployment.created", "deployment_status", "deployment_status.created", "discussion", "discussion.answered", "discussion.category_changed", "discussion.created", "discussion.deleted", "discussion.edited", "discussion.labeled", "discussion.locked", "discussion.pinned", "discussion.transferred", "discussion.unanswered", "discussion.unlabeled", "discussion.unlocked", "discussion.unpinned", "discussion_comment", "discussion_comment.created", "discussion_comment.deleted", "discussion_comment.edited", "fork", "github_app_authorization", "github_app_authorization.revoked", "gollum", "installation", "installation.created", "installation.deleted", "installation.new_permissions_accepted", "installation.suspend", "installation.unsuspend", "installation_repositories", "installation_repositories.added", "installation_repositories.removed", "issue_comment", "issue_comment.created", "issue_comment.deleted", "issue_comment.edited", "issues", "issues.assigned", "issues.closed", "issues.deleted", "issues.demilestoned", "issues.edited", "issues.labeled", "issues.locked", "issues.milestoned", "issues.opened", "issues.pinned", "issues.reopened", "issues.transferred", "issues.unassigned", "issues.unlabeled", "issues.unlocked", "issues.unpinned", "label", "label.created", "label.deleted", "label.edited", "marketplace_purchase", "marketplace_purchase.cancelled", "marketplace_purchase.changed", "marketplace_purchase.pending_change", "marketplace_purchase.pending_change_cancelled", "marketplace_purchase.purchased", "member", "member.added", "member.edited", "member.removed", "membership", "membership.added", "membership.removed", "merge_group", "merge_group.checks_requested", "meta", "meta.deleted", "milestone", "milestone.closed", "milestone.created", "milestone.deleted", "milestone.edited", "milestone.opened", "org_block", "org_block.blocked", "org_block.unblocked", "organization", "organization.deleted", "organization.member_added", "organization.member_invited", "organization.member_removed", "organization.renamed", "package", "package.published", "package.updated", "page_build", "ping", "project", "project.closed", "project.created", "project.deleted", "project.edited", "project.reopened", "project_card", "project_card.converted", "project_card.created", "project_card.deleted", "project_card.edited", "project_card.moved", "project_column", "project_column.created", "project_column.deleted", "project_column.edited", "project_column.moved", "projects_v2_item", "projects_v2_item.archived", "projects_v2_item.converted", "projects_v2_item.created", "projects_v2_item.deleted", "projects_v2_item.edited", "projects_v2_item.reordered", "projects_v2_item.restored", "public", "pull_request", "pull_request.assigned", "pull_request.auto_merge_disabled", "pull_request.auto_merge_enabled", "pull_request.closed", "pull_request.converted_to_draft", "pull_request.dequeued", "pull_request.edited", "pull_request.labeled", "pull_request.locked", "pull_request.opened", "pull_request.queued", "pull_request.ready_for_review", "pull_request.reopened", "pull_request.review_request_removed", "pull_request.review_requested", "pull_request.synchronize", "pull_request.unassigned", "pull_request.unlabeled", "pull_request.unlocked", "pull_request_review", "pull_request_review.dismissed", "pull_request_review.edited", "pull_request_review.submitted", "pull_request_review_comment", "pull_request_review_comment.created", "pull_request_review_comment.deleted", "pull_request_review_comment.edited", "pull_request_review_thread", "pull_request_review_thread.resolved", "pull_request_review_thread.unresolved", "push", "registry_package", "registry_package.published", "registry_package.updated", "release", "release.created", "release.deleted", "release.edited", "release.prereleased", "release.published", "release.released", "release.unpublished", "repository", "repository.archived", "repository.created", "repository.deleted", "repository.edited", "repository.privatized", "repository.publicized", "repository.renamed", "repository.transferred", "repository.unarchived", "repository_dispatch", "repository_import", "repository_vulnerability_alert", "repository_vulnerability_alert.create", "repository_vulnerability_alert.dismiss", "repository_vulnerability_alert.reopen", "repository_vulnerability_alert.resolve", "secret_scanning_alert", "secret_scanning_alert.created", "secret_scanning_alert.reopened", "secret_scanning_alert.resolved", "security_advisory", "security_advisory.performed", "security_advisory.published", "security_advisory.updated", "security_advisory.withdrawn", "sponsorship", "sponsorship.cancelled", "sponsorship.created", "sponsorship.edited", "sponsorship.pending_cancellation", "sponsorship.pending_tier_change", "sponsorship.tier_changed", "star", "star.created", "star.deleted", "status", "team", "team.added_to_repository", "team.created", "team.deleted", "team.edited", "team.removed_from_repository", "team_add", "watch", "watch.started", "workflow_dispatch", "workflow_job", "workflow_job.completed", "workflow_job.in_progress", "workflow_job.queued", "workflow_run", "workflow_run.completed", "workflow_run.in_progress", "workflow_run.requested"];
+    var emitterEventNames = [
+      "branch_protection_rule",
+      "branch_protection_rule.created",
+      "branch_protection_rule.deleted",
+      "branch_protection_rule.edited",
+      "check_run",
+      "check_run.completed",
+      "check_run.created",
+      "check_run.requested_action",
+      "check_run.rerequested",
+      "check_suite",
+      "check_suite.completed",
+      "check_suite.requested",
+      "check_suite.rerequested",
+      "code_scanning_alert",
+      "code_scanning_alert.appeared_in_branch",
+      "code_scanning_alert.closed_by_user",
+      "code_scanning_alert.created",
+      "code_scanning_alert.fixed",
+      "code_scanning_alert.reopened",
+      "code_scanning_alert.reopened_by_user",
+      "commit_comment",
+      "commit_comment.created",
+      "create",
+      "delete",
+      "dependabot_alert",
+      "dependabot_alert.created",
+      "dependabot_alert.dismissed",
+      "dependabot_alert.fixed",
+      "dependabot_alert.reintroduced",
+      "dependabot_alert.reopened",
+      "deploy_key",
+      "deploy_key.created",
+      "deploy_key.deleted",
+      "deployment",
+      "deployment.created",
+      "deployment_status",
+      "deployment_status.created",
+      "discussion",
+      "discussion.answered",
+      "discussion.category_changed",
+      "discussion.created",
+      "discussion.deleted",
+      "discussion.edited",
+      "discussion.labeled",
+      "discussion.locked",
+      "discussion.pinned",
+      "discussion.transferred",
+      "discussion.unanswered",
+      "discussion.unlabeled",
+      "discussion.unlocked",
+      "discussion.unpinned",
+      "discussion_comment",
+      "discussion_comment.created",
+      "discussion_comment.deleted",
+      "discussion_comment.edited",
+      "fork",
+      "github_app_authorization",
+      "github_app_authorization.revoked",
+      "gollum",
+      "installation",
+      "installation.created",
+      "installation.deleted",
+      "installation.new_permissions_accepted",
+      "installation.suspend",
+      "installation.unsuspend",
+      "installation_repositories",
+      "installation_repositories.added",
+      "installation_repositories.removed",
+      "installation_target",
+      "installation_target.renamed",
+      "issue_comment",
+      "issue_comment.created",
+      "issue_comment.deleted",
+      "issue_comment.edited",
+      "issues",
+      "issues.assigned",
+      "issues.closed",
+      "issues.deleted",
+      "issues.demilestoned",
+      "issues.edited",
+      "issues.labeled",
+      "issues.locked",
+      "issues.milestoned",
+      "issues.opened",
+      "issues.pinned",
+      "issues.reopened",
+      "issues.transferred",
+      "issues.unassigned",
+      "issues.unlabeled",
+      "issues.unlocked",
+      "issues.unpinned",
+      "label",
+      "label.created",
+      "label.deleted",
+      "label.edited",
+      "marketplace_purchase",
+      "marketplace_purchase.cancelled",
+      "marketplace_purchase.changed",
+      "marketplace_purchase.pending_change",
+      "marketplace_purchase.pending_change_cancelled",
+      "marketplace_purchase.purchased",
+      "member",
+      "member.added",
+      "member.edited",
+      "member.removed",
+      "membership",
+      "membership.added",
+      "membership.removed",
+      "merge_group",
+      "merge_group.checks_requested",
+      "meta",
+      "meta.deleted",
+      "milestone",
+      "milestone.closed",
+      "milestone.created",
+      "milestone.deleted",
+      "milestone.edited",
+      "milestone.opened",
+      "org_block",
+      "org_block.blocked",
+      "org_block.unblocked",
+      "organization",
+      "organization.deleted",
+      "organization.member_added",
+      "organization.member_invited",
+      "organization.member_removed",
+      "organization.renamed",
+      "package",
+      "package.published",
+      "package.updated",
+      "page_build",
+      "ping",
+      "project",
+      "project.closed",
+      "project.created",
+      "project.deleted",
+      "project.edited",
+      "project.reopened",
+      "project_card",
+      "project_card.converted",
+      "project_card.created",
+      "project_card.deleted",
+      "project_card.edited",
+      "project_card.moved",
+      "project_column",
+      "project_column.created",
+      "project_column.deleted",
+      "project_column.edited",
+      "project_column.moved",
+      "projects_v2_item",
+      "projects_v2_item.archived",
+      "projects_v2_item.converted",
+      "projects_v2_item.created",
+      "projects_v2_item.deleted",
+      "projects_v2_item.edited",
+      "projects_v2_item.reordered",
+      "projects_v2_item.restored",
+      "public",
+      "pull_request",
+      "pull_request.assigned",
+      "pull_request.auto_merge_disabled",
+      "pull_request.auto_merge_enabled",
+      "pull_request.closed",
+      "pull_request.converted_to_draft",
+      "pull_request.demilestoned",
+      "pull_request.dequeued",
+      "pull_request.edited",
+      "pull_request.labeled",
+      "pull_request.locked",
+      "pull_request.milestoned",
+      "pull_request.opened",
+      "pull_request.queued",
+      "pull_request.ready_for_review",
+      "pull_request.reopened",
+      "pull_request.review_request_removed",
+      "pull_request.review_requested",
+      "pull_request.synchronize",
+      "pull_request.unassigned",
+      "pull_request.unlabeled",
+      "pull_request.unlocked",
+      "pull_request_review",
+      "pull_request_review.dismissed",
+      "pull_request_review.edited",
+      "pull_request_review.submitted",
+      "pull_request_review_comment",
+      "pull_request_review_comment.created",
+      "pull_request_review_comment.deleted",
+      "pull_request_review_comment.edited",
+      "pull_request_review_thread",
+      "pull_request_review_thread.resolved",
+      "pull_request_review_thread.unresolved",
+      "push",
+      "registry_package",
+      "registry_package.published",
+      "registry_package.updated",
+      "release",
+      "release.created",
+      "release.deleted",
+      "release.edited",
+      "release.prereleased",
+      "release.published",
+      "release.released",
+      "release.unpublished",
+      "repository",
+      "repository.archived",
+      "repository.created",
+      "repository.deleted",
+      "repository.edited",
+      "repository.privatized",
+      "repository.publicized",
+      "repository.renamed",
+      "repository.transferred",
+      "repository.unarchived",
+      "repository_dispatch",
+      "repository_import",
+      "repository_vulnerability_alert",
+      "repository_vulnerability_alert.create",
+      "repository_vulnerability_alert.dismiss",
+      "repository_vulnerability_alert.reopen",
+      "repository_vulnerability_alert.resolve",
+      "secret_scanning_alert",
+      "secret_scanning_alert.created",
+      "secret_scanning_alert.reopened",
+      "secret_scanning_alert.resolved",
+      "security_advisory",
+      "security_advisory.performed",
+      "security_advisory.published",
+      "security_advisory.updated",
+      "security_advisory.withdrawn",
+      "sponsorship",
+      "sponsorship.cancelled",
+      "sponsorship.created",
+      "sponsorship.edited",
+      "sponsorship.pending_cancellation",
+      "sponsorship.pending_tier_change",
+      "sponsorship.tier_changed",
+      "star",
+      "star.created",
+      "star.deleted",
+      "status",
+      "team",
+      "team.added_to_repository",
+      "team.created",
+      "team.deleted",
+      "team.edited",
+      "team.removed_from_repository",
+      "team_add",
+      "watch",
+      "watch.started",
+      "workflow_dispatch",
+      "workflow_job",
+      "workflow_job.completed",
+      "workflow_job.in_progress",
+      "workflow_job.queued",
+      "workflow_run",
+      "workflow_run.completed",
+      "workflow_run.in_progress",
+      "workflow_run.requested"
+    ];
     function handleEventHandlers(state, webhookName, handler) {
       if (!state.hooks[webhookName]) {
         state.hooks[webhookName] = [];
@@ -20536,7 +22714,9 @@ var require_dist_node23 = __commonJS({
     }
     function receiverOn(state, webhookNameOrNames, handler) {
       if (Array.isArray(webhookNameOrNames)) {
-        webhookNameOrNames.forEach((webhookName) => receiverOn(state, webhookName, handler));
+        webhookNameOrNames.forEach(
+          (webhookName) => receiverOn(state, webhookName, handler)
+        );
         return;
       }
       if (["*", "error"].includes(webhookNameOrNames)) {
@@ -20545,7 +22725,9 @@ var require_dist_node23 = __commonJS({
         throw new Error(message);
       }
       if (!emitterEventNames.includes(webhookNameOrNames)) {
-        state.log.warn(`"${webhookNameOrNames}" is not a known webhook name (https://developer.github.com/v3/activity/events/types/)`);
+        state.log.warn(
+          `"${webhookNameOrNames}" is not a known webhook name (https://developer.github.com/v3/activity/events/types/)`
+        );
       }
       handleEventHandlers(state, webhookNameOrNames, handler);
     }
@@ -20555,6 +22737,7 @@ var require_dist_node23 = __commonJS({
     function receiverOnError(state, handler) {
       handleEventHandlers(state, "error", handler);
     }
+    var import_aggregate_error = __toESM2(require_aggregate_error());
     function wrapErrorHandler(handler, error) {
       let returnValue;
       try {
@@ -20580,7 +22763,7 @@ var require_dist_node23 = __commonJS({
     function receiverHandle(state, event) {
       const errorHandlers = state.hooks.error || [];
       if (event instanceof Error) {
-        const error = Object.assign(new AggregateError([event]), {
+        const error = Object.assign(new import_aggregate_error.default([event]), {
           event,
           errors: [event]
         });
@@ -20588,12 +22771,16 @@ var require_dist_node23 = __commonJS({
         return Promise.reject(error);
       }
       if (!event || !event.name) {
-        throw new AggregateError(["Event name not passed"]);
+        throw new import_aggregate_error.default(["Event name not passed"]);
       }
       if (!event.payload) {
-        throw new AggregateError(["Event payload not passed"]);
+        throw new import_aggregate_error.default(["Event payload not passed"]);
       }
-      const hooks = getHooks(state, "action" in event.payload ? event.payload.action : null, event.name);
+      const hooks = getHooks(
+        state,
+        "action" in event.payload ? event.payload.action : null,
+        event.name
+      );
       if (hooks.length === 0) {
         return Promise.resolve();
       }
@@ -20605,15 +22792,13 @@ var require_dist_node23 = __commonJS({
         }
         return promise.then((event2) => {
           return handler(event2);
-        }).catch((error) => errors.push(Object.assign(error, {
-          event
-        })));
+        }).catch((error) => errors.push(Object.assign(error, { event })));
       });
       return Promise.all(promises).then(() => {
         if (errors.length === 0) {
           return;
         }
-        const error = new AggregateError(errors);
+        const error = new import_aggregate_error.default(errors);
         Object.assign(error, {
           event,
           errors
@@ -20624,7 +22809,9 @@ var require_dist_node23 = __commonJS({
     }
     function removeListener(state, webhookNameOrNames, handler) {
       if (Array.isArray(webhookNameOrNames)) {
-        webhookNameOrNames.forEach((webhookName) => removeListener(state, webhookName, handler));
+        webhookNameOrNames.forEach(
+          (webhookName) => removeListener(state, webhookName, handler)
+        );
         return;
       }
       if (!state.hooks[webhookNameOrNames]) {
@@ -20653,6 +22840,7 @@ var require_dist_node23 = __commonJS({
         receive: receiverHandle.bind(null, state)
       };
     }
+    var import_webhooks_methods = require_dist_node22();
     function toNormalizedJsonString(payload) {
       const payloadString = JSON.stringify(payload);
       return payloadString.replace(/[^\\]\\u[\da-f]{4}/g, (s) => {
@@ -20660,19 +22848,33 @@ var require_dist_node23 = __commonJS({
       });
     }
     async function sign(secret, payload) {
-      return webhooksMethods.sign(secret, typeof payload === "string" ? payload : toNormalizedJsonString(payload));
+      return (0, import_webhooks_methods.sign)(
+        secret,
+        typeof payload === "string" ? payload : toNormalizedJsonString(payload)
+      );
     }
+    var import_webhooks_methods2 = require_dist_node22();
     async function verify(secret, payload, signature) {
-      return webhooksMethods.verify(secret, typeof payload === "string" ? payload : toNormalizedJsonString(payload), signature);
+      return (0, import_webhooks_methods2.verify)(
+        secret,
+        typeof payload === "string" ? payload : toNormalizedJsonString(payload),
+        signature
+      );
     }
+    var import_webhooks_methods3 = require_dist_node22();
     async function verifyAndReceive(state, event) {
-      const matchesSignature = await webhooksMethods.verify(state.secret, typeof event.payload === "object" ? toNormalizedJsonString(event.payload) : event.payload, event.signature);
+      const matchesSignature = await (0, import_webhooks_methods3.verify)(
+        state.secret,
+        typeof event.payload === "object" ? toNormalizedJsonString(event.payload) : event.payload,
+        event.signature
+      );
       if (!matchesSignature) {
-        const error = new Error("[@octokit/webhooks] signature does not match event payload and secret");
-        return state.eventHandler.receive(Object.assign(error, {
-          event,
-          status: 400
-        }));
+        const error = new Error(
+          "[@octokit/webhooks] signature does not match event payload and secret"
+        );
+        return state.eventHandler.receive(
+          Object.assign(error, { event, status: 400 })
+        );
       }
       return state.eventHandler.receive({
         id: event.id,
@@ -20680,21 +22882,28 @@ var require_dist_node23 = __commonJS({
         payload: typeof event.payload === "string" ? JSON.parse(event.payload) : event.payload
       });
     }
-    var WEBHOOK_HEADERS = ["x-github-event", "x-hub-signature-256", "x-github-delivery"];
+    var WEBHOOK_HEADERS = [
+      "x-github-event",
+      "x-hub-signature-256",
+      "x-github-delivery"
+    ];
     function getMissingHeaders(request) {
       return WEBHOOK_HEADERS.filter((header) => !(header in request.headers));
     }
+    var import_aggregate_error2 = __toESM2(require_aggregate_error());
     function getPayload(request) {
       if (request.body) {
         if (typeof request.body !== "string") {
-          console.warn("[@octokit/webhooks] Passing the payload as a JSON object in `request.body` is deprecated and will be removed in a future release of `@octokit/webhooks`, please pass it as a a `string` instead.");
+          console.warn(
+            "[@octokit/webhooks] Passing the payload as a JSON object in `request.body` is deprecated and will be removed in a future release of `@octokit/webhooks`, please pass it as a a `string` instead."
+          );
         }
         return Promise.resolve(request.body);
       }
       return new Promise((resolve, reject) => {
         let data = "";
         request.setEncoding("utf8");
-        request.on("error", (error) => reject(new AggregateError([error])));
+        request.on("error", (error) => reject(new import_aggregate_error2.default([error])));
         request.on("data", (chunk) => data += chunk);
         request.on("end", () => {
           try {
@@ -20703,7 +22912,7 @@ var require_dist_node23 = __commonJS({
           } catch (error) {
             error.message = "Invalid JSON";
             error.status = 400;
-            reject(new AggregateError([error]));
+            reject(new import_aggregate_error2.default([error]));
           }
         });
       });
@@ -20716,9 +22925,11 @@ var require_dist_node23 = __commonJS({
         response.writeHead(422, {
           "content-type": "application/json"
         });
-        response.end(JSON.stringify({
-          error: `Request URL could not be parsed: ${request.url}`
-        }));
+        response.end(
+          JSON.stringify({
+            error: `Request URL could not be parsed: ${request.url}`
+          })
+        );
         return;
       }
       const isUnknownRoute = request.method !== "POST" || pathname !== options.path;
@@ -20730,14 +22941,16 @@ var require_dist_node23 = __commonJS({
           return options.onUnhandledRequest(request, response);
         }
       }
-      if (!request.headers["content-type"].startsWith("application/json")) {
+      if (!request.headers["content-type"] || !request.headers["content-type"].startsWith("application/json")) {
         response.writeHead(415, {
           "content-type": "application/json",
           accept: "application/json"
         });
-        response.end(JSON.stringify({
-          error: `Unsupported "Content-Type" header value. Must be "application/json"`
-        }));
+        response.end(
+          JSON.stringify({
+            error: `Unsupported "Content-Type" header value. Must be "application/json"`
+          })
+        );
         return;
       }
       const missingHeaders = getMissingHeaders(request).join(", ");
@@ -20745,9 +22958,11 @@ var require_dist_node23 = __commonJS({
         response.writeHead(400, {
           "content-type": "application/json"
         });
-        response.end(JSON.stringify({
-          error: `Required headers missing: ${missingHeaders}`
-        }));
+        response.end(
+          JSON.stringify({
+            error: `Required headers missing: ${missingHeaders}`
+          })
+        );
         return;
       }
       const eventName = request.headers["x-github-event"];
@@ -20780,26 +22995,32 @@ var require_dist_node23 = __commonJS({
         const errorMessage = err.message ? `${err.name}: ${err.message}` : "Error: An Unspecified error occurred";
         response.statusCode = typeof err.status !== "undefined" ? err.status : 500;
         options.log.error(error);
-        response.end(JSON.stringify({
-          error: errorMessage
-        }));
+        response.end(
+          JSON.stringify({
+            error: errorMessage
+          })
+        );
       }
     }
     function onUnhandledRequestDefault(request, response) {
       response.writeHead(404, {
         "content-type": "application/json"
       });
-      response.end(JSON.stringify({
-        error: `Unknown route: ${request.method} ${request.url}`
-      }));
+      response.end(
+        JSON.stringify({
+          error: `Unknown route: ${request.method} ${request.url}`
+        })
+      );
     }
-    function createNodeMiddleware(webhooks, {
+    function createNodeMiddleware2(webhooks, {
       path = "/api/github/webhooks",
       onUnhandledRequest = onUnhandledRequestDefault,
       log = createLogger()
     } = {}) {
       const deprecateOnUnhandledRequest = (request, response) => {
-        console.warn("[@octokit/webhooks] `onUnhandledRequest()` is deprecated and will be removed in a future release of `@octokit/webhooks`");
+        console.warn(
+          "[@octokit/webhooks] `onUnhandledRequest()` is deprecated and will be removed in a future release of `@octokit/webhooks`"
+        );
         return onUnhandledRequest(request, response);
       };
       return middleware.bind(null, webhooks, {
@@ -20822,7 +23043,9 @@ var require_dist_node23 = __commonJS({
         this.sign = sign.bind(null, options.secret);
         this.verify = (eventPayload, signature) => {
           if (typeof eventPayload === "object") {
-            console.warn("[@octokit/webhooks] Passing a JSON payload object to `verify()` is deprecated and the functionality will be removed in a future release of `@octokit/webhooks`");
+            console.warn(
+              "[@octokit/webhooks] Passing a JSON payload object to `verify()` is deprecated and the functionality will be removed in a future release of `@octokit/webhooks`"
+            );
           }
           return verify(options.secret, eventPayload, signature);
         };
@@ -20833,38 +23056,58 @@ var require_dist_node23 = __commonJS({
         this.receive = state.eventHandler.receive;
         this.verifyAndReceive = (options2) => {
           if (typeof options2.payload === "object") {
-            console.warn("[@octokit/webhooks] Passing a JSON payload object to `verifyAndReceive()` is deprecated and the functionality will be removed in a future release of `@octokit/webhooks`");
+            console.warn(
+              "[@octokit/webhooks] Passing a JSON payload object to `verifyAndReceive()` is deprecated and the functionality will be removed in a future release of `@octokit/webhooks`"
+            );
           }
           return verifyAndReceive(state, options2);
         };
       }
     };
-    exports.Webhooks = Webhooks;
-    exports.createEventHandler = createEventHandler;
-    exports.createNodeMiddleware = createNodeMiddleware;
-    exports.emitterEventNames = emitterEventNames;
   }
 });
 
 // node_modules/@octokit/app/dist-node/index.js
 var require_dist_node24 = __commonJS({
-  "node_modules/@octokit/app/dist-node/index.js"(exports) {
+  "node_modules/@octokit/app/dist-node/index.js"(exports, module2) {
     "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    var core2 = require_dist_node8();
-    var authApp = require_dist_node19();
-    var oauthApp = require_dist_node21();
-    var authUnauthenticated = require_dist_node20();
-    var webhooks$1 = require_dist_node23();
-    var pluginPaginateRest = require_dist_node9();
-    var VERSION = "13.1.1";
+    var __defProp2 = Object.defineProperty;
+    var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
+    var __getOwnPropNames2 = Object.getOwnPropertyNames;
+    var __hasOwnProp2 = Object.prototype.hasOwnProperty;
+    var __export2 = (target, all) => {
+      for (var name in all)
+        __defProp2(target, name, { get: all[name], enumerable: true });
+    };
+    var __copyProps2 = (to, from, except, desc) => {
+      if (from && typeof from === "object" || typeof from === "function") {
+        for (let key of __getOwnPropNames2(from))
+          if (!__hasOwnProp2.call(to, key) && key !== except)
+            __defProp2(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc2(from, key)) || desc.enumerable });
+      }
+      return to;
+    };
+    var __toCommonJS2 = (mod) => __copyProps2(__defProp2({}, "__esModule", { value: true }), mod);
+    var dist_src_exports = {};
+    __export2(dist_src_exports, {
+      App: () => App,
+      createNodeMiddleware: () => createNodeMiddleware2
+    });
+    module2.exports = __toCommonJS2(dist_src_exports);
+    var import_core = require_dist_node8();
+    var import_auth_app3 = require_dist_node19();
+    var import_oauth_app2 = require_dist_node21();
+    var VERSION = "13.1.5";
+    var import_auth_app = require_dist_node19();
+    var import_auth_unauthenticated = require_dist_node20();
+    var import_webhooks = require_dist_node23();
     function webhooks(appOctokit, options) {
-      return new webhooks$1.Webhooks({
+      return new import_webhooks.Webhooks({
         secret: options.secret,
         transform: async (event) => {
           if (!("installation" in event.payload) || typeof event.payload.installation !== "object") {
             const octokit2 = new appOctokit.constructor({
-              authStrategy: authUnauthenticated.createUnauthenticatedAuth,
+              authStrategy: import_auth_unauthenticated.createUnauthenticatedAuth,
               auth: {
                 reason: `"installation" key missing in webhook event payload`
               }
@@ -20881,7 +23124,7 @@ var require_dist_node24 = __commonJS({
             factory(auth) {
               return new auth.octokit.constructor({
                 ...auth.octokitOptions,
-                authStrategy: authApp.createAppAuth,
+                authStrategy: import_auth_app.createAppAuth,
                 ...{
                   auth: {
                     ...auth,
@@ -20901,6 +23144,8 @@ var require_dist_node24 = __commonJS({
         }
       });
     }
+    var import_plugin_paginate_rest = require_dist_node9();
+    var import_auth_app2 = require_dist_node19();
     async function getInstallationOctokit(app, installationId) {
       return app.octokit.auth({
         type: "installation",
@@ -20908,13 +23153,8 @@ var require_dist_node24 = __commonJS({
         factory(auth) {
           const options = {
             ...auth.octokitOptions,
-            authStrategy: authApp.createAppAuth,
-            ...{
-              auth: {
-                ...auth,
-                installationId
-              }
-            }
+            authStrategy: import_auth_app2.createAppAuth,
+            ...{ auth: { ...auth, installationId } }
           };
           return new auth.octokit.constructor(options);
         }
@@ -20936,28 +23176,33 @@ var require_dist_node24 = __commonJS({
     function eachInstallationIterator(app) {
       return {
         async *[Symbol.asyncIterator]() {
-          const iterator = pluginPaginateRest.composePaginateRest.iterator(app.octokit, "GET /app/installations");
-          for await (const {
-            data: installations
-          } of iterator) {
+          const iterator = import_plugin_paginate_rest.composePaginateRest.iterator(
+            app.octokit,
+            "GET /app/installations"
+          );
+          for await (const { data: installations } of iterator) {
             for (const installation of installations) {
-              const installationOctokit = await getInstallationOctokit(app, installation.id);
-              yield {
-                octokit: installationOctokit,
-                installation
-              };
+              const installationOctokit = await getInstallationOctokit(
+                app,
+                installation.id
+              );
+              yield { octokit: installationOctokit, installation };
             }
           }
         }
       };
     }
+    var import_plugin_paginate_rest2 = require_dist_node9();
     function eachRepositoryFactory(app) {
       return Object.assign(eachRepository.bind(null, app), {
         iterator: eachRepositoryIterator.bind(null, app)
       });
     }
     async function eachRepository(app, queryOrCallback, callback) {
-      const i = eachRepositoryIterator(app, callback ? queryOrCallback : void 0)[Symbol.asyncIterator]();
+      const i = eachRepositoryIterator(
+        app,
+        callback ? queryOrCallback : void 0
+      )[Symbol.asyncIterator]();
       let result = await i.next();
       while (!result.done) {
         if (callback) {
@@ -20981,53 +23226,56 @@ var require_dist_node24 = __commonJS({
       return {
         async *[Symbol.asyncIterator]() {
           const iterator = query ? singleInstallationIterator(app, query.installationId) : app.eachInstallation.iterator();
-          for await (const {
-            octokit
-          } of iterator) {
-            const repositoriesIterator = pluginPaginateRest.composePaginateRest.iterator(octokit, "GET /installation/repositories");
-            for await (const {
-              data: repositories
-            } of repositoriesIterator) {
+          for await (const { octokit } of iterator) {
+            const repositoriesIterator = import_plugin_paginate_rest2.composePaginateRest.iterator(
+              octokit,
+              "GET /installation/repositories"
+            );
+            for await (const { data: repositories } of repositoriesIterator) {
               for (const repository of repositories) {
-                yield {
-                  octokit,
-                  repository
-                };
+                yield { octokit, repository };
               }
             }
           }
         }
       };
     }
+    var import_oauth_app = require_dist_node21();
+    var import_webhooks2 = require_dist_node23();
     function onUnhandledRequestDefault(request, response) {
       response.writeHead(404, {
         "content-type": "application/json"
       });
-      response.end(JSON.stringify({
-        error: `Unknown route: ${request.method} ${request.url}`
-      }));
+      response.end(
+        JSON.stringify({
+          error: `Unknown route: ${request.method} ${request.url}`
+        })
+      );
     }
     function noop() {
     }
-    function createNodeMiddleware(app, options = {}) {
-      const log = Object.assign({
-        debug: noop,
-        info: noop,
-        warn: console.warn.bind(console),
-        error: console.error.bind(console)
-      }, options.log);
+    function createNodeMiddleware2(app, options = {}) {
+      const log = Object.assign(
+        {
+          debug: noop,
+          info: noop,
+          warn: console.warn.bind(console),
+          error: console.error.bind(console)
+        },
+        options.log
+      );
       const optionsWithDefaults = {
         onUnhandledRequest: onUnhandledRequestDefault,
         pathPrefix: "/api/github",
         ...options,
         log
       };
-      const webhooksMiddleware = webhooks$1.createNodeMiddleware(app.webhooks, {
+      const webhooksMiddleware = (0, import_webhooks2.createNodeMiddleware)(app.webhooks, {
         path: optionsWithDefaults.pathPrefix + "/webhooks",
         log,
         onUnhandledRequest: optionsWithDefaults.onUnhandledRequest
       });
-      const oauthMiddleware = oauthApp.createNodeMiddleware(app.oauth, {
+      const oauthMiddleware = (0, import_oauth_app.createNodeMiddleware)(app.oauth, {
         pathPrefix: optionsWithDefaults.pathPrefix + "/oauth",
         onUnhandledRequest: optionsWithDefaults.onUnhandledRequest
       });
@@ -21036,13 +23284,8 @@ var require_dist_node24 = __commonJS({
         oauthMiddleware
       });
     }
-    async function middleware(options, {
-      webhooksMiddleware,
-      oauthMiddleware
-    }, request, response, next) {
-      const {
-        pathname
-      } = new URL(request.url, "http://localhost");
+    async function middleware(options, { webhooksMiddleware, oauthMiddleware }, request, response, next) {
+      const { pathname } = new URL(request.url, "http://localhost");
       if (pathname === `${options.pathPrefix}/webhooks`) {
         return webhooksMiddleware(request, response, next);
       }
@@ -21068,27 +23311,33 @@ var require_dist_node24 = __commonJS({
         return AppWithDefaults;
       }
       constructor(options) {
-        const Octokit2 = options.Octokit || core2.Octokit;
-        const authOptions = Object.assign({
-          appId: options.appId,
-          privateKey: options.privateKey
-        }, options.oauth ? {
-          clientId: options.oauth.clientId,
-          clientSecret: options.oauth.clientSecret
-        } : {});
+        const Octokit2 = options.Octokit || import_core.Octokit;
+        const authOptions = Object.assign(
+          {
+            appId: options.appId,
+            privateKey: options.privateKey
+          },
+          options.oauth ? {
+            clientId: options.oauth.clientId,
+            clientSecret: options.oauth.clientSecret
+          } : {}
+        );
         this.octokit = new Octokit2({
-          authStrategy: authApp.createAppAuth,
+          authStrategy: import_auth_app3.createAppAuth,
           auth: authOptions,
           log: options.log
         });
-        this.log = Object.assign({
-          debug: () => {
+        this.log = Object.assign(
+          {
+            debug: () => {
+            },
+            info: () => {
+            },
+            warn: console.warn.bind(console),
+            error: console.error.bind(console)
           },
-          info: () => {
-          },
-          warn: console.warn.bind(console),
-          error: console.error.bind(console)
-        }, options.log);
+          options.log
+        );
         if (options.webhooks) {
           this.webhooks = webhooks(this.octokit, options.webhooks);
         } else {
@@ -21099,7 +23348,7 @@ var require_dist_node24 = __commonJS({
           });
         }
         if (options.oauth) {
-          this.oauth = new oauthApp.OAuthApp({
+          this.oauth = new import_oauth_app2.OAuthApp({
             ...options.oauth,
             clientType: "github-app",
             Octokit: Octokit2
@@ -21107,35 +23356,69 @@ var require_dist_node24 = __commonJS({
         } else {
           Object.defineProperty(this, "oauth", {
             get() {
-              throw new Error("[@octokit/app] oauth.clientId / oauth.clientSecret options are not set");
+              throw new Error(
+                "[@octokit/app] oauth.clientId / oauth.clientSecret options are not set"
+              );
             }
           });
         }
-        this.getInstallationOctokit = getInstallationOctokit.bind(null, this);
-        this.eachInstallation = eachInstallationFactory(this);
-        this.eachRepository = eachRepositoryFactory(this);
+        this.getInstallationOctokit = getInstallationOctokit.bind(
+          null,
+          this
+        );
+        this.eachInstallation = eachInstallationFactory(
+          this
+        );
+        this.eachRepository = eachRepositoryFactory(
+          this
+        );
       }
     };
     App.VERSION = VERSION;
-    exports.App = App;
-    exports.createNodeMiddleware = createNodeMiddleware;
   }
 });
 
 // node_modules/octokit/dist-node/index.js
 var require_dist_node25 = __commonJS({
-  "node_modules/octokit/dist-node/index.js"(exports) {
+  "node_modules/octokit/dist-node/index.js"(exports, module2) {
     "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    var core2 = require_dist_node8();
-    var pluginPaginateRest = require_dist_node9();
-    var pluginRestEndpointMethods = require_dist_node10();
-    var pluginRetry = require_dist_node11();
-    var pluginThrottling = require_dist_node12();
-    var app = require_dist_node24();
-    var oauthApp = require_dist_node21();
-    var VERSION = "2.0.11";
-    var Octokit2 = core2.Octokit.plugin(pluginRestEndpointMethods.restEndpointMethods, pluginPaginateRest.paginateRest, pluginRetry.retry, pluginThrottling.throttling).defaults({
+    var __defProp2 = Object.defineProperty;
+    var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
+    var __getOwnPropNames2 = Object.getOwnPropertyNames;
+    var __hasOwnProp2 = Object.prototype.hasOwnProperty;
+    var __export2 = (target, all) => {
+      for (var name in all)
+        __defProp2(target, name, { get: all[name], enumerable: true });
+    };
+    var __copyProps2 = (to, from, except, desc) => {
+      if (from && typeof from === "object" || typeof from === "function") {
+        for (let key of __getOwnPropNames2(from))
+          if (!__hasOwnProp2.call(to, key) && key !== except)
+            __defProp2(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc2(from, key)) || desc.enumerable });
+      }
+      return to;
+    };
+    var __toCommonJS2 = (mod) => __copyProps2(__defProp2({}, "__esModule", { value: true }), mod);
+    var dist_src_exports = {};
+    __export2(dist_src_exports, {
+      App: () => App,
+      OAuthApp: () => OAuthApp,
+      Octokit: () => Octokit2,
+      createNodeMiddleware: () => import_app2.createNodeMiddleware
+    });
+    module2.exports = __toCommonJS2(dist_src_exports);
+    var import_core = require_dist_node8();
+    var import_plugin_paginate_rest = require_dist_node9();
+    var import_plugin_rest_endpoint_methods = require_dist_node10();
+    var import_plugin_retry = require_dist_node11();
+    var import_plugin_throttling = require_dist_node12();
+    var VERSION = "2.0.19";
+    var Octokit2 = import_core.Octokit.plugin(
+      import_plugin_rest_endpoint_methods.restEndpointMethods,
+      import_plugin_paginate_rest.paginateRest,
+      import_plugin_retry.retry,
+      import_plugin_throttling.throttling
+    ).defaults({
       userAgent: `octokit.js/${VERSION}`,
       throttle: {
         onRateLimit,
@@ -21143,34 +23426,28 @@ var require_dist_node25 = __commonJS({
       }
     });
     function onRateLimit(retryAfter, options, octokit) {
-      octokit.log.warn(`Request quota exhausted for request ${options.method} ${options.url}`);
+      octokit.log.warn(
+        `Request quota exhausted for request ${options.method} ${options.url}`
+      );
       if (options.request.retryCount === 0) {
         octokit.log.info(`Retrying after ${retryAfter} seconds!`);
         return true;
       }
     }
     function onSecondaryRateLimit(retryAfter, options, octokit) {
-      octokit.log.warn(`SecondaryRateLimit detected for request ${options.method} ${options.url}`);
+      octokit.log.warn(
+        `SecondaryRateLimit detected for request ${options.method} ${options.url}`
+      );
       if (options.request.retryCount === 0) {
         octokit.log.info(`Retrying after ${retryAfter} seconds!`);
         return true;
       }
     }
-    var App = app.App.defaults({
-      Octokit: Octokit2
-    });
-    var OAuthApp = oauthApp.OAuthApp.defaults({
-      Octokit: Octokit2
-    });
-    Object.defineProperty(exports, "createNodeMiddleware", {
-      enumerable: true,
-      get: function() {
-        return app.createNodeMiddleware;
-      }
-    });
-    exports.App = App;
-    exports.OAuthApp = OAuthApp;
-    exports.Octokit = Octokit2;
+    var import_app = require_dist_node24();
+    var import_oauth_app = require_dist_node21();
+    var import_app2 = require_dist_node24();
+    var App = import_app.App.defaults({ Octokit: Octokit2 });
+    var OAuthApp = import_oauth_app.OAuthApp.defaults({ Octokit: Octokit2 });
   }
 });
 
@@ -21333,7 +23610,8 @@ function run() {
     console.log("Starting");
     try {
       const PAT = core.getInput("GITHUB_TOKEN") || process.env.PAT || "";
-      const issue = core.getInput("issue") || process.env.issue || "";
+      var issue = core.getInput("issue") || process.env.issue || "";
+      const pr = core.getInput("pr") || process.env.pr || "";
       const team = core.getInput("team") || process.env.team || "";
       let repo = core.getInput("repo") || process.env.repo || "";
       let owner = core.getInput("owner") || process.env.owner || "";
@@ -21344,15 +23622,24 @@ function run() {
         );
         return;
       }
-      if (team === "" || issue === "") {
+      if (team === "") {
         core.setFailed(
-          "Both parameters 'team' or 'issue' are required to load all actions from it. Please provide one of them."
+          "Parameter 'team' is required. Please provide it, can be a single user as well"
         );
         return;
       }
+      if (issue === "" && pr === "") {
+        core.setFailed(
+          "Either parameters 'pr' or 'issue' is required. Please provide one of them."
+        );
+        return;
+      }
+      if (pr !== ``) {
+        issue = pr;
+      }
       if (owner === "" || repo === "") {
         core.setFailed(
-          "Both parameters 'owner' or 'repo' are required to load all actions from it. Please provide one of them."
+          "Both parameters 'owner' or 'repo' are required. Please provide both of them."
         );
         return;
       }
