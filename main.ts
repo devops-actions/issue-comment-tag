@@ -31,7 +31,7 @@ async function run(): Promise<void> {
       return
     }
     
-    if (issue === '' || pr === '') {
+    if (issue === '' && pr === '') {
       core.setFailed(
         "Either parameters 'pr' or 'issue' is required. Please provide one of them."
       )
