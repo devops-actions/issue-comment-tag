@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     #if: github.ref == 'refs/heads/main' # don't run on PRs or branches
     steps: 
-      - uses: actions/checkout@8e5e7e5ab8b370d6c329ec480221332ada57f0ab # v3.3.0 # this will checkout the compiled Typescript
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.3.0 # this will checkout the compiled Typescript
      
       #- uses: hmarr/debug-action@v2
 
