@@ -29,7 +29,7 @@
       "yaml": "^2.3.3"
     },
     "devDependencies": {
-      "@types/node": "^20.8.10",
+      "@types/node": "^20.10.1",
       "@typescript-eslint/parser": "^6.13.1",
       "@vercel/ncc": "^0.38.0",
       "ansi-regex": ">=5.0.1",
