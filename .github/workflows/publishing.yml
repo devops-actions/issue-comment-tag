@@ -13,7 +13,7 @@ jobs:
   build: # make sure build/ci work properly
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@9bb56186c3b09b4f86b1c65136769dd318469633 # v4.1.2
       - run: npm ci
       - run: npm run all
 
@@ -21,7 +21,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps: 
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@9bb56186c3b09b4f86b1c65136769dd318469633 # v4.1.2
 
       # execute the action locally for testing if anything breaks
       - uses: ./
@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # get code
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@9bb56186c3b09b4f86b1c65136769dd318469633 # v4.1.2
 
       # build it
       - run: |
