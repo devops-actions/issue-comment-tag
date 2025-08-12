@@ -11229,9 +11229,13 @@ async function run() {
       const parts = repo.split("/");
       owner = parts[0];
       repo = parts[1];
-      console.log(`Converted owner/repo input for the repo to owner: [${owner}] and repo: [${repo}]`);
+      console.log(
+        `Converted owner/repo input for the repo to owner: [${owner}] and repo: [${repo}]`
+      );
     }
-    console.log(`Parameters that we have. Owner: [${owner}], Repo: [${repo}], Issue: [${issue}], team: [${team}] and a token with length: [${PAT.length}]`);
+    console.log(
+      `Parameters that we have. Owner: [${owner}], Repo: [${repo}], Issue: [${issue}], team: [${team}] and a token with length: [${PAT.length}]`
+    );
     const octokit = new Octokit2({ auth: PAT, baseUrl: BASE_URL });
     try {
       console.log(`Getting the list of actions from the issue: [${issue}]`);
@@ -11249,7 +11253,9 @@ async function run() {
     }
     let commentExists = false;
     try {
-      console.log(`Checking all comments on the issue to prevent us adding the comment twice: [${issue}]`);
+      console.log(
+        `Checking all comments on the issue to prevent us adding the comment twice: [${issue}]`
+      );
       const { data: comments } = await octokit.rest.issues.listComments({
         owner,
         repo,
