@@ -3,6 +3,8 @@ on: [push, pull_request, workflow_dispatch]
 
 permissions:
   contents: read
+  # needed to annotate the files in a pull request with comments
+  pull-requests: write
 
 jobs:
   actionlint:
@@ -11,6 +13,4 @@ jobs:
       - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
       
       - name: Check workflow files
-        uses: docker://rhysd/actionlint@sha256:5f957b2a08d223e48133e1a914ed046bea12e578fe2f6ae4de47fdbe691a2468 # 1.6.22
-        with:
-          args: -color
+        uses: devops-actions/actionlint@e7ee33fbf5aa8c9f9ee1145137f3e52e25d6a35b # v0.1.3
