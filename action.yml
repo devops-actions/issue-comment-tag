@@ -25,5 +25,5 @@ inputs:
     description: 'The GitHub token to use to create a new comment with. Use `secrets.GITHUB_TOKEN` to inject it'
     required: true
 runs:
-  using: 'node16'
+  using: 'node24'
   main: 'dist/main.js'
