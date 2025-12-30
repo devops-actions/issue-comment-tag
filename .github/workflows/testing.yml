@@ -15,6 +15,10 @@ jobs:
     #if: github.ref == 'refs/heads/main' # don't run on PRs
     steps:
       - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: '24'
+          cache: 'npm'
       - run: npm ci
       - run: npm run all
 
