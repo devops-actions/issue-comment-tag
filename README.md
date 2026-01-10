@@ -8,7 +8,19 @@ Sometimes you want to tag a team or multiple persons when an issue (or something
 
 # Usage:
 
-Requirements:
+## Required Permissions
+
+This action requires specific GitHub token permissions to function correctly. You must grant these permissions in your workflow:
+
+``` yaml
+permissions:
+  issues: write           # Required when working with issues
+  pull-requests: write    # Required when working with pull requests
+```
+
+**Note:** If you do not set these permissions and your workflow has restricted permissions elsewhere, the action will fail with a clear error message indicating which permissions are missing.
+
+## Requirements
 
 A [GitHub App](https://docs.github.com/en/developers/apps/getting-started-with-apps/about-apps#about-github-apps) installed on the repository/organization that the GitHub Actions Workflow will execute from.
 The GitHub Apps minimally should have the following permissions:
@@ -32,6 +44,9 @@ A method to retrieve an access token from the App, a good example for an action 
 on:
   issues:
     types: [opened]
+
+permissions:
+  issues: write
     
 jobs:
   tag-a-user:
@@ -45,6 +60,13 @@ jobs:
           owner: ${{ github.repository_owner }}
           repo: ${{ github.repository }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+**Important:** If you have limited permissions elsewhere in your workflow, you must explicitly grant the required permissions:
+``` yaml
+permissions:
+  issues: write           # Required for issues
+  pull-requests: write    # Required for pull requests
 ```
 
 ## Tagging an internal team or user
