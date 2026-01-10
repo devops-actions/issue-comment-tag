@@ -78,7 +78,7 @@ async function run(): Promise<void> {
       // todo: check if the team is already tagged in the issue body
     } catch (error) {
       core.setFailed(
-        `Could not authenticate with GITHUB_TOKEN. Please check that it is correct and that it has [read access] to the organization or user account: ${error}`
+        `Could not access the issue. Please check that GITHUB_TOKEN has the correct permissions (issues: read for issues, pull-requests: read for PRs): ${error}`
       )
       return
     }
@@ -114,16 +114,17 @@ async function run(): Promise<void> {
         console.log(`Adding comment to the issue`)
 
         const body = `Tagging @${team} for notifications`
-        octokit.rest.issues.createComment({
+        await octokit.rest.issues.createComment({
           owner,
           repo,
           issue_number: +issue,
           body
         })
+        console.log(`Comment created successfully`)
       }
     } catch (error) {
       core.setFailed(
-        `Could not authenticate with GITHUB_TOKEN. Please check that it is correct and that it has [read access] to the organization or user account: ${error}`
+        `Could not create or list comments on the issue. Please check that GITHUB_TOKEN has the correct permissions (issues: write for issues, pull-requests: write for PRs): ${error}`
       )
       return
     }
