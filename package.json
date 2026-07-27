@@ -47,6 +47,12 @@
     },
     "optionalDependencies": {
       "fsevents": "^2.3.3"
+    },
+    "overrides": {
+      "@istanbuljs/load-nyc-config": {
+        "js-yaml": "^3.15.0"
+      },
+      "@babel/core": "^7.29.6"
     }
   }
   
