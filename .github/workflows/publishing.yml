@@ -36,48 +36,31 @@ jobs:
           owner: ${{ github.repository_owner }}
           repo: ${{ github.repository }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    
-  publish:
+
+  release:
+    name: Release with SBOM and attestations
     needs: test-local-action
+    # Creates the GitHub release for this tag with the action files, a source archive and
+    # SPDX/CycloneDX SBOMs attached, each with a verified artifact attestation.
+    permissions:
+      contents: write       # create the release and upload its assets
+      id-token: write       # Sigstore keyless signing for the attestations
+      attestations: write   # store the attestations
+    uses: devops-actions/.github/.github/workflows/rw-release-attestation.yml@b88953c2b5ba6cfc3048a7fb6d32dc78e1588c58 # main
+
+  notify:
+    needs: release
+    if: always()
     runs-on: ubuntu-latest
     steps:
-      # get code
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # setup node
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '24'
-          cache: 'npm'
-
-      # build it
-      - run: |
-          npm ci
-          npm run all
-
-      # get tag for this release
-      - name: Get tag value
-        id: tag
-        uses: devops-actions/action-get-tag@0b6f974a480221bd60c9341b6ac4d54b851a1307 # v1.0.1
-
-      # publish a release with the build assets
-      - uses: rajbos-actions/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
-        id: publish
-        with:
-          name: Release ${{ steps.tag.outputs.tag }}
-          tag_name: ${{ github.ref }}
-          body: Release ${{ steps.tag.outputs.tag }} is available now
-          files: ./dist/main.js
-          token: ${{ secrets.PAT }}
-
-      - run: |
-          echo "$url"
+      - name: Show release result
         env:
-          url: ${{ steps.publish.outputs.url }}
+          RESULT: ${{ needs.release.result }}
+          URL: ${{ needs.release.outputs.release-url }}
+        run: echo "Release $GITHUB_REF_NAME - $RESULT $URL"
 
       - uses: rajbos-actions/slack@ed1309ab9862e57e9e583e51c7889486b9a00b0f # v2.0.0
-        with: 
-          status: ${{ job.status }}
+        with:
+          status: ${{ needs.release.result }}
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        if: always()
